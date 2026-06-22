@@ -1,0 +1,93 @@
+{
+  "name": "zelos",
+  "displayName": "Zelos",
+  "description": "Autonomous AI Coding Agent",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Machine Learning"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "zelos-panel",
+          "title": "Zelos",
+          "icon": "$(hubot)"
+        }
+      ]
+    },
+    "views": {
+      "zelos-panel": [
+        {
+          "type": "webview",
+          "id": "zelos.chatView",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "zelos.start",
+        "title": "Start Zelos"
+      }
+    ],
+    "configuration": {
+      "title": "Zelos",
+      "properties": {
+        "zelos.api.url": {
+          "type": "string",
+          "default": "https://api.kie.ai",
+          "description": "Base URL for the KIE API"
+        },
+        "zelos.api.model": {
+          "type": "string",
+          "default": "gpt-5-5",
+          "description": "Model to use for Zelos"
+        },
+        "zelos.api.key": {
+          "type": "string",
+          "default": "",
+          "description": "API Key for KIE"
+        },
+        "zelos.commandApprovalMode": {
+          "type": "string",
+          "enum": [
+            "prompt",
+            "acceptAll",
+            "rejectAll"
+          ],
+          "default": "prompt",
+          "description": "Approval mode for running terminal commands"
+        },
+        "zelos.fileApprovalMode": {
+          "type": "string",
+          "enum": [
+            "prompt",
+            "acceptAll",
+            "rejectAll"
+          ],
+          "default": "prompt",
+          "description": "Approval mode for creating or modifying files"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "npm run check-types && node esbuild.js --production",
+    "check-types": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^18.x",
+    "@types/vscode": "^1.80.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {}
+}
