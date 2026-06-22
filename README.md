@@ -70,6 +70,8 @@ Open VS Code settings (`Ctrl+,` or `Cmd+,`) and search for **Zelos** to configur
 | `zelos.api.model` | `string` | `gpt-5-5` | The LLM model used (e.g. `gpt-5-5`, `gpt-5-codex`). |
 | `zelos.commandApprovalMode`| `enum` | `prompt` | Approval strategy for running terminal commands (`prompt` \| `acceptAll` \| `rejectAll`). |
 | `zelos.fileApprovalMode` | `enum` | `prompt` | Approval strategy for modifying workspace files (`prompt` \| `acceptAll` \| `rejectAll`). |
+| `zelos.communicationLanguage` | `enum` | `English` | Language used for conversational communication with the agent (`English` \| `French`). |
+| `zelos.codeLanguage` | `enum` | `English` | Language applied for comments, variable naming, and documentation in the generated code (`English` \| `French`). |
 
 Alternatively, you can manage these settings directly inside the **Zelos Webview Settings Panel** (⚙️).
 

@@ -333,6 +333,32 @@
 				<option value="rejectAll">Reject All Automatically</option>
 			</select>
 		</div>
+		<div class="setting-row">
+			<label for="communication-language-input">Communication Language</label>
+			<select id="communication-language-input">
+				<option value="English">English</option>
+				<option value="French">French</option>
+				<option value="Spanish">Spanish</option>
+				<option value="German">German</option>
+				<option value="Italian">Italian</option>
+				<option value="Portuguese">Portuguese</option>
+				<option value="Japanese">Japanese</option>
+				<option value="Chinese">Chinese</option>
+			</select>
+		</div>
+		<div class="setting-row">
+			<label for="code-language-input">Code Language</label>
+			<select id="code-language-input">
+				<option value="English">English</option>
+				<option value="French">French</option>
+				<option value="Spanish">Spanish</option>
+				<option value="German">German</option>
+				<option value="Italian">Italian</option>
+				<option value="Portuguese">Portuguese</option>
+				<option value="Japanese">Japanese</option>
+				<option value="Chinese">Chinese</option>
+			</select>
+		</div>
 		<button id="save-settings-button">Save Settings</button>
 	</div>
 
@@ -408,6 +434,8 @@
 		const customModelInput = document.getElementById('custom-model-input');
 		const commandApprovalInput = document.getElementById('command-approval-input');
 		const fileApprovalInput = document.getElementById('file-approval-input');
+		const communicationLanguageInput = document.getElementById('communication-language-input');
+		const codeLanguageInput = document.getElementById('code-language-input');
 		const saveBtn = document.getElementById('save-settings-button');
 		const resetBtn = document.getElementById('reset-btn');
 		const auditToggle = document.getElementById('audit-toggle');
@@ -705,7 +733,9 @@
 				apiKey: apiKeyInput.value.trim(),
 				apiUrl: apiUrlInput.value.trim(),
 				commandApprovalMode: commandApprovalInput.value,
-				fileApprovalMode: fileApprovalInput.value
+				fileApprovalMode: fileApprovalInput.value,
+				communicationLanguage: communicationLanguageInput.value,
+				codeLanguage: codeLanguageInput.value
 			});
 			settingsPanel.style.display = 'none';
 		});
@@ -761,6 +791,8 @@
 					
 					commandApprovalInput.value = msg.commandApprovalMode;
 					fileApprovalInput.value = msg.fileApprovalMode;
+					communicationLanguageInput.value = msg.communicationLanguage || 'English';
+					codeLanguageInput.value = msg.codeLanguage || 'English';
 					break;
 
 				case 'userMessage':

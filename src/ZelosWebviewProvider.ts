@@ -78,6 +78,8 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 						apiUrl: config.get<string>('api.url') || 'https://api.kie.ai',
 						commandApprovalMode: config.get<string>('commandApprovalMode') || 'prompt',
 						fileApprovalMode: config.get<string>('fileApprovalMode') || 'prompt',
+						communicationLanguage: config.get<string>('communicationLanguage') || 'English',
+						codeLanguage: config.get<string>('codeLanguage') || 'English',
 					});
 					this._updateCredits();
 					break;
@@ -133,6 +135,8 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 						config.update('api.url', data.apiUrl, true),
 						config.update('commandApprovalMode', data.commandApprovalMode, true),
 						config.update('fileApprovalMode', data.fileApprovalMode, true),
+						config.update('communicationLanguage', data.communicationLanguage, true),
+						config.update('codeLanguage', data.codeLanguage, true),
 					]).then(() => {
 						vscode.window.showInformationMessage('Zelos settings saved!');
 						this._updateCredits();
@@ -837,6 +841,32 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 				<option value="rejectAll">Reject All Automatically</option>
 			</select>
 		</div>
+		<div class="setting-row">
+			<label for="communication-language-input">Communication Language</label>
+			<select id="communication-language-input">
+				<option value="English">English</option>
+				<option value="French">French</option>
+				<option value="Spanish">Spanish</option>
+				<option value="German">German</option>
+				<option value="Italian">Italian</option>
+				<option value="Portuguese">Portuguese</option>
+				<option value="Japanese">Japanese</option>
+				<option value="Chinese">Chinese</option>
+			</select>
+		</div>
+		<div class="setting-row">
+			<label for="code-language-input">Code Language</label>
+			<select id="code-language-input">
+				<option value="English">English</option>
+				<option value="French">French</option>
+				<option value="Spanish">Spanish</option>
+				<option value="German">German</option>
+				<option value="Italian">Italian</option>
+				<option value="Portuguese">Portuguese</option>
+				<option value="Japanese">Japanese</option>
+				<option value="Chinese">Chinese</option>
+			</select>
+		</div>
 		<button id="save-settings-button">Save Settings</button>
 	</div>
 
@@ -917,6 +947,8 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		const customModelInput = document.getElementById('custom-model-input');
 		const commandApprovalInput = document.getElementById('command-approval-input');
 		const fileApprovalInput = document.getElementById('file-approval-input');
+		const communicationLanguageInput = document.getElementById('communication-language-input');
+		const codeLanguageInput = document.getElementById('code-language-input');
 		const saveBtn = document.getElementById('save-settings-button');
 		const resetBtn = document.getElementById('reset-btn');
 		const creditBadge = document.getElementById('credit-badge');
@@ -1203,7 +1235,9 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 				apiKey: apiKeyInput.value.trim(),
 				apiUrl: apiUrlInput.value.trim(),
 				commandApprovalMode: commandApprovalInput.value,
-				fileApprovalMode: fileApprovalInput.value
+				fileApprovalMode: fileApprovalInput.value,
+				communicationLanguage: communicationLanguageInput.value,
+				codeLanguage: codeLanguageInput.value
 			});
 			autoApproveCheckbox.checked = (fileApprovalInput.value === 'acceptAll');
 			settingsPanel.style.display = 'none';
@@ -1270,6 +1304,8 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 					commandApprovalInput.value = msg.commandApprovalMode;
 					fileApprovalInput.value = msg.fileApprovalMode;
 					autoApproveCheckbox.checked = (msg.fileApprovalMode === 'acceptAll');
+					communicationLanguageInput.value = msg.communicationLanguage || 'English';
+					codeLanguageInput.value = msg.codeLanguage || 'English';
 					break;
 
 				case 'userMessage':

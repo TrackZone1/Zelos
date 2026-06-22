@@ -72,6 +72,36 @@
           ],
           "default": "prompt",
           "description": "Approval mode for creating or modifying files"
+        },
+        "zelos.communicationLanguage": {
+          "type": "string",
+          "enum": [
+            "English",
+            "French",
+            "Spanish",
+            "German",
+            "Italian",
+            "Portuguese",
+            "Japanese",
+            "Chinese"
+          ],
+          "default": "English",
+          "description": "Language used for conversational communication with the agent"
+        },
+        "zelos.codeLanguage": {
+          "type": "string",
+          "enum": [
+            "English",
+            "French",
+            "Spanish",
+            "German",
+            "Italian",
+            "Portuguese",
+            "Japanese",
+            "Chinese"
+          ],
+          "default": "English",
+          "description": "Language applied for comments, variable naming, and documentation in the generated code"
         }
       }
     }

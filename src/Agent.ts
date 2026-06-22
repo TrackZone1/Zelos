@@ -210,12 +210,30 @@ export class Agent {
 	private _getSystemPrompt(): string {
 		const platform = process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : 'Linux';
 		const shell = process.platform === 'win32' ? 'PowerShell or cmd.exe' : 'bash/sh';
-		return [
+		const config = vscode.workspace.getConfiguration('zelos');
+		const communicationLanguage = config.get<string>('communicationLanguage') || 'English';
+		const codeLanguage = config.get<string>('codeLanguage') || 'English';
+
+		const promptParts = [
 			'You are Zelos, an autonomous AI coding agent embedded in VS Code.',
 			`Current environment: Running on ${platform} (Shell: ${shell}). Please ensure any shell commands run via <run_command> or functions.shell are fully compatible with this operating system.`,
-			'',
-			SYSTEM_PROMPT_BODY
-		].join('\n');
+			''
+		];
+
+		promptParts.push(
+			'## LANGUAGE OF COMMUNICATION',
+			`You MUST communicate and write ALL your conversational responses in ${communicationLanguage}. However, do NOT translate tool tags, XML tags, or code keywords.`,
+			''
+		);
+
+		promptParts.push(
+			'## LANGUAGE OF CODE',
+			`Within any code you generate, create, or modify, you MUST write all comments, documentation, variable names, function names, class names, and text strings in ${codeLanguage} unless they are predefined library dependencies.`,
+			''
+		);
+
+		promptParts.push(SYSTEM_PROMPT_BODY);
+		return promptParts.join('\n');
 	}
 
 	private _resetHistory() {
@@ -259,6 +277,11 @@ export class Agent {
 		if (!apiKey) {
 			this._emit({ type: 'error', message: 'API Key not configured. Go to Settings ⚙️ to add your KIE API key.' });
 			return;
+		}
+
+		// Dynamically update the system prompt with the latest settings
+		if (this._history.length > 0 && this._history[0].role === 'system') {
+			this._history[0].content = this._getSystemPrompt();
 		}
 
 		const commandApprovalMode = config.get<string>('commandApprovalMode') || 'prompt';
