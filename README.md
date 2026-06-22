@@ -21,6 +21,11 @@ Running autonomous AI agents typically consumes a massive amount of tokens due t
   - `<read_file>`: Read file content for analysis.
   - `<list_files>`: List project structures.
   - `<run_command>`: Execute terminal commands (compiling, testing, formatting).
+  - `<visual_review>`: Ask a separate visual model to review page UI, click buttons, type inputs, scroll, and verify functionality on a running Chrome instance.
+- **📸 Multimodal Image Upload & Context**:
+  - **Chat Image Attachment**: Directly attach images in the Zelos sidebar panel. Images are uploaded to KIE's temporary storage, and their URLs are passed into the model's multimodal context.
+  - **Visual Review screenshots**: The navigation review subagent automatically uploads screenshots of the debug Chrome browser using the KIE base64 upload API, facilitating visually guided page analysis.
+  - Supports **Gemini 3.5 Flash** with custom endpoints and `inline_data` payloads.
 - **🛡️ Secure Approval Workflows**: Choose between:
   - **Prompt mode** (default): Review and approve every terminal command or file modification before it runs.
   - **Auto-approve/Reject**: Full execution automation or high-security lockouts.
@@ -72,6 +77,8 @@ Open VS Code settings (`Ctrl+,` or `Cmd+,`) and search for **Zelos** to configur
 | `zelos.fileApprovalMode` | `enum` | `prompt` | Approval strategy for modifying workspace files (`prompt` \| `acceptAll` \| `rejectAll`). |
 | `zelos.communicationLanguage` | `enum` | `English` | Language used for conversational communication with the agent (`English` \| `French`). |
 | `zelos.codeLanguage` | `enum` | `English` | Language applied for comments, variable naming, and documentation in the generated code (`English` \| `French`). |
+| `zelos.api.visualModel` | `string` | `gemini-3.5-flash` | The model used for visual review and page navigation (e.g. `gemini-3.5-flash`, `gpt-5-4`). |
+| `zelos.chrome.selectedProfile` | `string` | `Default` | Chrome profile directory to launch for debugging. |
 
 Alternatively, you can manage these settings directly inside the **Zelos Webview Settings Panel** (⚙️).
 
@@ -94,6 +101,13 @@ Alternatively, you can manage these settings directly inside the **Zelos Webview
    - Perform cognitive complexity analysis (with threshold)
    - Auto-critique & Self-correct issues
 3. Click **Start Audit** and watch Zelos examine, test, critique, and self-heal your workspace autonomously.
+
+### 🌐 Visual Review & Browser Control
+1. Click the **Browser** button in the top bar to open the Chrome CDP control panel.
+2. Select your desired Chrome Profile.
+3. Click **Launch Browser** to launch a local Chrome instance on debug port `9222`.
+4. Run instructions requiring visual inspection or web navigation using the `<visual_review url="..." instruction="..."></visual_review>` tool block.
+5. The Visual Review subagent will launch, navigate the page, perform clicks/scrolls, capture screenshots, upload them to KIE, and review the UI for bugs or layouts.
 
 ---
 

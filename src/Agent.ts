@@ -5,7 +5,7 @@ import { ToolExecutor } from './ToolExecutor';
 
 interface ChatMessage {
 	role: 'system' | 'user' | 'assistant';
-	content: string;
+	content: string | { type: string; text?: string; image_url?: string }[];
 }
 
 export interface AgentEvent {
@@ -43,6 +43,10 @@ const SYSTEM_PROMPT_BODY = [
 	'',
 	'### 4. List directory contents',
 	'<list_files path="."></list_files>',
+	'',
+	'### 5. Visual Review / Browser Navigation (collaborates with visual model)',
+	'Use this to ask a separate visual model to review page UI, click buttons, type inputs, scroll, and verify functionality on a running Chrome instance.',
+	'<visual_review url="http://localhost:3000" instruction="Click sign up and check for form validation errors."></visual_review>',
 	'',
 	'## Example of CORRECT behavior',
 	'User: "Create an index.html with a hello world page"',
@@ -108,7 +112,7 @@ export class Agent {
 		this._emit({ type: 'status', message: '*(Conversation reset)*' });
 	}
 
-	public async handleUserMessage(message: string) {
+	public async handleUserMessage(message: string, base64Image?: string) {
 		if (this._busy) {
 			this._emit({ type: 'error', message: 'Zelos is still working on the previous request. Please wait.' });
 			return;
@@ -120,13 +124,73 @@ export class Agent {
 		try {
 			// Build the user message with optional editor context
 			const userContent = this._buildUserContent(message);
-			this._history.push({ role: 'user', content: userContent });
+			
+			let finalContent: string | { type: string; text?: string; image_url?: string }[] = userContent;
+			if (base64Image) {
+				this._emit({ type: 'status', message: 'Uploading image to KIE...' });
+				const imageUrl = await this._uploadImageToKie(base64Image);
+				if (imageUrl) {
+					finalContent = [
+						{ type: 'input_text', text: userContent },
+						{ type: 'input_image', image_url: imageUrl }
+					];
+				}
+			}
+
+			this._history.push({ role: 'user', content: finalContent });
 
 			await this._runAgentLoop();
 		} finally {
 			this._busy = false;
 			this._emit({ type: 'unlock', message: '' });
 		}
+	}
+
+	private async _uploadImageToKie(base64DataUrl: string): Promise<string | null> {
+		const config = vscode.workspace.getConfiguration('zelos');
+		const apiKey = config.get<string>('api.key') || '';
+		if (!apiKey) return null;
+
+		try {
+			let base64Data = base64DataUrl;
+			let mimeType = 'image/png';
+			if (base64DataUrl.includes(';base64,')) {
+				const parts = base64DataUrl.split(';base64,');
+				base64Data = parts[1];
+				const match = parts[0].match(/data:(.*)/);
+				if (match) mimeType = match[1];
+			}
+
+			const ext = mimeType.split('/')[1] || 'png';
+			const fileName = `upload-${Date.now()}.${ext}`;
+
+			const response = await fetch('https://api.kie.ai/api/file-base64-upload', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'Authorization': `Bearer ${apiKey}`,
+				},
+				body: JSON.stringify({
+					base64Data,
+					uploadPath: 'images/chat-uploads',
+					fileName
+				})
+			});
+
+			if (response.ok) {
+				const resData = await response.json() as any;
+				if (resData.success && resData.data?.downloadUrl) {
+					return resData.data.downloadUrl;
+				} else {
+					console.error('KIE image upload failed:', resData.msg);
+				}
+			} else {
+				console.error('KIE image upload response status:', response.status);
+			}
+		} catch (err) {
+			console.error('Error uploading image to KIE:', err);
+		}
+		return base64DataUrl;
 	}
 
 	/** Triggers an autonomous workspace audit (review and test) loop. */
@@ -319,13 +383,23 @@ export class Agent {
 
 			for (let attempt = 0; attempt <= MAX_API_RETRIES; attempt++) {
 				try {
+					let body: any;
+					if (model === 'gemini-3.5-flash') {
+						body = {
+							contents: await this._buildGeminiContents(this._history),
+							stream: false
+						};
+					} else {
+						body = { model, stream: false, input: kieInput };
+					}
+
 					response = await fetch(fetchUrl, {
 						method: 'POST',
 						headers: {
 							'Content-Type': 'application/json',
 							'Authorization': `Bearer ${apiKey}`,
 						},
-						body: JSON.stringify({ model, stream: false, input: kieInput }),
+						body: JSON.stringify(body),
 					});
 
 					if (response.ok) {
@@ -409,7 +483,12 @@ export class Agent {
 				}
 
 				// Execute any tools found in the reply
-				const { uiMessage, toolResults } = await this._toolExecutor.executeActions(reply, reqCmdApproval, reqFileApproval);
+				const { uiMessage, toolResults } = await this._toolExecutor.executeActions(
+					reply,
+					reqCmdApproval,
+					reqFileApproval,
+					(status) => this._emit({ type: 'status', message: status })
+				);
 
 				if (toolResults.length > 0) {
 					// Show tool actions in UI
@@ -489,6 +568,14 @@ export class Agent {
 
 	/** Determines the correct KIE API endpoint based on the model name. */
 	private _resolveApiUrl(baseUrl: string, model: string): string {
+		if (model === 'gemini-3.5-flash') {
+			const cleanUrl = baseUrl.replace(/\/+$/, '');
+			if (cleanUrl.includes('api.kie.ai') || cleanUrl.includes('kie.ai')) {
+				return 'https://api.kie.ai/gemini/v1/models/gemini-3-5-flash:streamGenerateContent';
+			} else {
+				return cleanUrl + '/gemini/v1/models/gemini-3-5-flash:streamGenerateContent';
+			}
+		}
 		if (!baseUrl.includes('api.kie.ai') && !baseUrl.includes('kie.ai')) {
 			return baseUrl;
 		}
@@ -500,6 +587,11 @@ export class Agent {
 
 	/** Extracts the text reply from the KIE Codex API response format. */
 	private _extractReply(data: any): string {
+		// Gemini format
+		if (data.candidates?.[0]?.content?.parts?.[0]) {
+			const textPart = data.candidates[0].content.parts.find((p: any) => p.text !== undefined);
+			if (textPart) return textPart.text;
+		}
 		// KIE Codex format
 		if (data.output && Array.isArray(data.output)) {
 			const msg = data.output.find((o: any) => o.role === 'assistant');
@@ -547,7 +639,24 @@ export class Agent {
 			for (const msg of history) {
 				if (msg.role === 'system') continue;
 				const roleLabel = msg.role === 'user' ? 'User' : 'Assistant (Zelos)';
-				conversationTurns.push(`${roleLabel}: ${msg.content}`);
+				if (typeof msg.content === 'string') {
+					conversationTurns.push(`${roleLabel}: ${msg.content}`);
+				} else {
+					let textParts = '';
+					let imageUrls: string[] = [];
+					for (const part of msg.content) {
+						if (part.type === 'input_text' && part.text) {
+							textParts += part.text;
+						} else if (part.type === 'input_image' && part.image_url) {
+							imageUrls.push(part.image_url);
+						}
+					}
+					let turnStr = `${roleLabel}: ${textParts}`;
+					if (imageUrls.length > 0) {
+						turnStr += ` [Attached Images: ${imageUrls.join(', ')}]`;
+					}
+					conversationTurns.push(turnStr);
+				}
 			}
 
 			const condensedPrompt = [
@@ -560,18 +669,117 @@ export class Agent {
 				'Continue the task by executing the next step (using tool tags) or reply with a short summary if complete.'
 			].join('\n');
 
+			const contentParts: any[] = [{ type: 'input_text', text: condensedPrompt }];
+			for (const msg of history) {
+				if (msg.role === 'user' && Array.isArray(msg.content)) {
+					for (const part of msg.content) {
+						if (part.type === 'input_image' && part.image_url) {
+							contentParts.push({ type: 'input_image', image_url: part.image_url });
+						}
+					}
+				}
+			}
+
 			return [
 				{
 					role: 'user',
-					content: [{ type: 'input_text', text: condensedPrompt }]
+					content: contentParts
 				}
 			];
 		}
 
 		// Standard multi-turn format for other models
-		return history.map(msg => ({
-			role: msg.role,
-			content: [{ type: 'input_text', text: msg.content }],
-		}));
+		return history.map(msg => {
+			if (typeof msg.content === 'string') {
+				return {
+					role: msg.role,
+					content: [{ type: 'input_text', text: msg.content }],
+				};
+			} else {
+				return {
+					role: msg.role,
+					content: msg.content
+				};
+			}
+		});
+	}
+
+	private async _buildGeminiContents(history: ChatMessage[]): Promise<any[]> {
+		const geminiContents: any[] = [];
+		let systemPrompt = '';
+
+		for (const msg of history) {
+			if (msg.role === 'system') {
+				if (typeof msg.content === 'string') {
+					systemPrompt += msg.content + '\n\n';
+				} else {
+					for (const part of msg.content) {
+						if (part.type === 'input_text' && part.text) {
+							systemPrompt += part.text + '\n\n';
+						}
+					}
+				}
+				continue;
+			}
+
+			const role = msg.role === 'assistant' ? 'model' : 'user';
+			const parts: any[] = [];
+
+			if (typeof msg.content === 'string') {
+				let text = msg.content;
+				if (systemPrompt && role === 'user' && geminiContents.length === 0) {
+					text = systemPrompt + text;
+					systemPrompt = '';
+				}
+				parts.push({ text });
+			} else {
+				for (const part of msg.content) {
+					if (part.type === 'input_text' && part.text) {
+						let text = part.text;
+						if (systemPrompt && role === 'user' && geminiContents.length === 0) {
+							text = systemPrompt + text;
+							systemPrompt = '';
+						}
+						parts.push({ text });
+					} else if (part.type === 'input_image' && part.image_url) {
+						if (part.image_url.startsWith('data:')) {
+							const mimeTypeMatch = part.image_url.match(/data:(.*?);base64,/);
+							const base64Data = part.image_url.split(';base64,')[1];
+							if (base64Data) {
+								parts.push({
+									inline_data: {
+										mime_type: mimeTypeMatch ? mimeTypeMatch[1] : 'image/png',
+										data: base64Data
+									}
+								});
+							}
+						} else if (part.image_url.startsWith('http')) {
+							try {
+								const imgRes = await fetch(part.image_url);
+								if (imgRes.ok) {
+									const arrayBuffer = await imgRes.arrayBuffer();
+									const base64Data = Buffer.from(arrayBuffer).toString('base64');
+									const mimeType = imgRes.headers.get('content-type') || 'image/png';
+									parts.push({
+										inline_data: {
+											mime_type: mimeType,
+											data: base64Data
+										}
+									});
+								}
+							} catch (err) {
+								console.error('Failed to download image for Gemini input:', err);
+							}
+						}
+					}
+				}
+			}
+
+			if (parts.length > 0) {
+				geminiContents.push({ role, parts });
+			}
+		}
+
+		return geminiContents;
 	}
 }

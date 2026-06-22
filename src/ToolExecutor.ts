@@ -35,7 +35,8 @@ export class ToolExecutor {
 	public async executeActions(
 		reply: string,
 		requestCommandApproval?: (command: string) => Promise<boolean>,
-		requestFileApproval?: (path: string, content: string) => Promise<boolean>
+		requestFileApproval?: (path: string, content: string) => Promise<boolean>,
+		emitStatus?: (status: string) => void
 	): Promise<{ uiMessage: string; toolResults: ToolResult[] }> {
 		let uiMessage = reply;
 		const toolResults: ToolResult[] = [];
@@ -89,6 +90,13 @@ export class ToolExecutor {
 			toolResults.push(r.result);
 		}
 
+		// ── visual_review ────────────────────────────────────────────
+		const visualResults = await this._handleVisualReview(reply, emitStatus);
+		for (const r of visualResults) {
+			uiMessage = uiMessage.replace(r.rawMatch, r.uiSnippet);
+			toolResults.push(r.result);
+		}
+
 		// ── Strip remaining wrapper tags ─────────────────────────────
 		uiMessage = uiMessage
 			.replace(/<tool_call\s+name="multi_tool_use\.parallel">/g, '')
@@ -100,7 +108,7 @@ export class ToolExecutor {
 	// ─── Private helpers ──────────────────────────────────────────────
 
 	private _hasToolTags(text: string): boolean {
-		return /<(create_file|run_command|read_file|list_files|tool_call)[\s>]/.test(text);
+		return /<(create_file|run_command|read_file|list_files|tool_call|visual_review)[\s>]/.test(text);
 	}
 
 	private async _handleCreateFile(
@@ -397,5 +405,100 @@ export class ToolExecutor {
 			}
 		}
 		return results;
+	}
+
+	private async _handleVisualReview(
+		reply: string,
+		emitStatus?: (status: string) => void
+	): Promise<{ rawMatch: string; uiSnippet: string; result: ToolResult }[]> {
+		const regex = /<visual_review\s+url="([^"]+)"\s+instruction="([^"]+)">\s*<\/visual_review>/g;
+		const results: { rawMatch: string; uiSnippet: string; result: ToolResult }[] = [];
+		let match;
+
+		while ((match = regex.exec(reply)) !== null) {
+			const url = match[1];
+			const instruction = match[2];
+			const rawMatch = match[0];
+
+			const res = await this._runVisualReview(url, instruction, rawMatch, emitStatus);
+			results.push(res);
+		}
+		return results;
+	}
+
+	private async _runVisualReview(
+		url: string,
+		instruction: string,
+		rawMatch: string,
+		emitStatus?: (status: string) => void
+	): Promise<{ rawMatch: string; uiSnippet: string; result: ToolResult }> {
+		const statusCallback = emitStatus || ((s) => console.log('Visual Review:', s));
+		statusCallback(`Connecting to Chrome Debugger to review ${url}...`);
+
+		// Dynamically import to avoid circular dependencies
+		const { CDPClient } = require('./CDPClient');
+		const { VisualReviewAgent } = require('./VisualReviewAgent');
+
+		const config = vscode.workspace.getConfiguration('zelos');
+		const apiKey = config.get<string>('api.key') || '';
+		const apiUrl = config.get<string>('api.url') || 'https://api.kie.ai';
+		const visualModel = config.get<string>('api.visualModel') || 'gemini-3.5-flash';
+
+		if (!apiKey) {
+			return {
+				rawMatch,
+				uiSnippet: `\n> **[Failed] Visual Review:** KIE API Key is not configured in Settings.\n`,
+				result: { action: `visual_review ${url}`, status: 'error', details: 'API Key not configured.' }
+			};
+		}
+
+		let client: any;
+		try {
+			// Find active tab or create one
+			const listResponse = await fetch('http://localhost:9222/json/list');
+			if (!listResponse.ok) {
+				throw new Error('Chrome remote debugging is not responding on port 9222. Please launch the debug browser first.');
+			}
+			const targets = (await listResponse.json()) as any[];
+			let pageTarget = targets.find(t => t.type === 'page');
+			if (!pageTarget) {
+				const newResponse = await fetch('http://localhost:9222/json/new');
+				if (!newResponse.ok) {
+					throw new Error('No open tabs found and failed to create a new one.');
+				}
+				pageTarget = await newResponse.json() as any;
+			}
+
+			client = new CDPClient(pageTarget.webSocketDebuggerUrl);
+			await client.connect();
+
+			const subagent = new VisualReviewAgent({
+				cdpClient: client,
+				model: visualModel,
+				apiUrl,
+				apiKey,
+				emitStatus: statusCallback
+			});
+
+			const report = await subagent.run(url, instruction);
+
+			return {
+				rawMatch,
+				uiSnippet: `\n> **[Completed] Visual Review on:** \`${url}\`\n`,
+				result: { action: `visual_review ${url}`, status: 'success', details: report }
+			};
+		} catch (err: any) {
+			return {
+				rawMatch,
+				uiSnippet: `\n> **[Failed] Visual Review on:** \`${url}\` — ${err.message}\n`,
+				result: { action: `visual_review ${url}`, status: 'error', details: err.message }
+			};
+		} finally {
+			if (client) {
+				try {
+					client.close();
+				} catch (_) {}
+			}
+		}
 	}
 }

@@ -102,6 +102,16 @@
           ],
           "default": "English",
           "description": "Language applied for comments, variable naming, and documentation in the generated code"
+        },
+        "zelos.api.visualModel": {
+          "type": "string",
+          "default": "gemini-3.5-flash",
+          "description": "Model to use for Visual Review and browser navigation"
+        },
+        "zelos.chrome.selectedProfile": {
+          "type": "string",
+          "default": "Default",
+          "description": "Chrome profile directory to launch for debugging"
         }
       }
     }
@@ -116,8 +126,11 @@
   "devDependencies": {
     "@types/node": "^18.x",
     "@types/vscode": "^1.80.0",
+    "@types/ws": "^8.5.10",
     "esbuild": "^0.20.0",
     "typescript": "^5.3.3"
   },
-  "dependencies": {}
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
 }

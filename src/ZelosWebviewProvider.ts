@@ -1,4 +1,7 @@
 import * as vscode from 'vscode';
+import { spawn } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 import { Agent, AgentEvent } from './Agent';
 
 export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
@@ -80,12 +83,65 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 						fileApprovalMode: config.get<string>('fileApprovalMode') || 'prompt',
 						communicationLanguage: config.get<string>('communicationLanguage') || 'English',
 						codeLanguage: config.get<string>('codeLanguage') || 'English',
+						visualModel: config.get<string>('api.visualModel') || 'gemini-3.5-flash',
+						selectedProfile: config.get<string>('chrome.selectedProfile') || 'Default',
+					});
+					const profiles = this._getChromeProfiles();
+					this._view?.webview.postMessage({
+						type: 'chromeProfiles',
+						profiles
 					});
 					this._updateCredits();
 					break;
 				}
+				case 'launchChrome': {
+					this._launchChrome(data.profile).then(success => {
+						this._view?.webview.postMessage({
+							type: 'browserStatus',
+							connected: success,
+							message: success ? 'Connected (Port 9222)' : 'Failed to connect. Make sure Chrome is closed.'
+						});
+					});
+					break;
+				}
+				case 'checkBrowser': {
+					this._checkPort9222().then(connected => {
+						this._view?.webview.postMessage({
+							type: 'browserStatus',
+							connected,
+							message: connected ? 'Connected (Port 9222)' : 'Disconnected'
+						});
+					});
+					break;
+				}
+				case 'navigateUrl': {
+					this._checkPort9222().then(async connected => {
+						if (!connected) {
+							vscode.window.showErrorMessage('Browser is not connected. Launch it first!');
+							return;
+						}
+						try {
+							const { CDPClient } = require('./CDPClient');
+							const response = await fetch('http://localhost:9222/json/list');
+							const targets = await response.json() as any[];
+							let target = targets.find(t => t.type === 'page');
+							if (!target) {
+								const newResponse = await fetch('http://localhost:9222/json/new');
+								target = await newResponse.json() as any;
+							}
+							const client = new CDPClient(target.webSocketDebuggerUrl);
+							await client.connect();
+							await client.navigate(data.value);
+							client.close();
+							vscode.window.showInformationMessage(`Navigated to ${data.value}`);
+						} catch (err: any) {
+							vscode.window.showErrorMessage(`Failed to navigate: ${err.message}`);
+						}
+					});
+					break;
+				}
 				case 'chat': {
-					this._handleChatMessage(data.value);
+					this._handleChatMessage(data.value, data.image);
 					break;
 				}
 				case 'approveCommand': {
@@ -137,6 +193,8 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 						config.update('fileApprovalMode', data.fileApprovalMode, true),
 						config.update('communicationLanguage', data.communicationLanguage, true),
 						config.update('codeLanguage', data.codeLanguage, true),
+						config.update('api.visualModel', data.visualModel, true),
+						config.update('chrome.selectedProfile', data.selectedProfile, true),
 					]).then(() => {
 						vscode.window.showInformationMessage('Zelos settings saved!');
 						this._updateCredits();
@@ -146,6 +204,16 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 				case 'updateModel': {
 					const config = vscode.workspace.getConfiguration('zelos');
 					config.update('api.model', data.value, true);
+					break;
+				}
+				case 'updateVisualModel': {
+					const config = vscode.workspace.getConfiguration('zelos');
+					config.update('api.visualModel', data.value, true);
+					break;
+				}
+				case 'updateSelectedProfile': {
+					const config = vscode.workspace.getConfiguration('zelos');
+					config.update('chrome.selectedProfile', data.value, true);
 					break;
 				}
 				case 'updateFileApprovalMode': {
@@ -165,10 +233,10 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		});
 	}
 
-	private async _handleChatMessage(message: string) {
+	private async _handleChatMessage(message: string, base64Image?: string) {
 		if (!this._view) return;
-		this._view.webview.postMessage({ type: 'userMessage', value: message });
-		await this._agent.handleUserMessage(message);
+		this._view.webview.postMessage({ type: 'userMessage', value: message, image: base64Image });
+		await this._agent.handleUserMessage(message, base64Image);
 		this._updateCredits();
 	}
 
@@ -802,6 +870,23 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			transition: background 0.2s;
 		}
 		#run-audit-button:hover { background: var(--accent-hover); }
+
+		#attach-image-btn {
+			background: none;
+			color: var(--vscode-foreground);
+			border: 1px solid var(--border-color);
+			padding: 8px 10px;
+			cursor: pointer;
+			border-radius: 4px;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			transition: all 0.2s ease;
+		}
+		#attach-image-btn:hover {
+			background: var(--vscode-toolbar-hoverBackground);
+			border-color: var(--vscode-focusBorder);
+		}
 	</style>
 </head>
 <body>
@@ -814,6 +899,46 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		<button class="top-btn" id="reset-btn" title="New conversation"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg> Reset</button>
 		<button class="top-btn" id="settings-toggle" title="Settings"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg> Settings</button>
 		<button class="top-btn" id="audit-toggle" title="Review & Test Workspace"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg> Audit</button>
+		<button class="top-btn" id="browser-toggle" title="Browser Control"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line><path d="M8 21h8M12 17v4"></path></svg> Browser</button>
+	</div>
+
+	<div id="browser-panel" style="display: none; flex-direction: column; gap: 10px; padding: 12px; background: var(--card-bg); border: 1px solid var(--border-color); margin-bottom: 8px; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); animation: slideDown 0.25s ease-out;">
+		<div class="browser-header">
+			<h3 style="font-size: 13px; font-weight: 600; margin-bottom: 4px; color: var(--accent);">Chrome CDP Browser Control</h3>
+			<p style="font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 4px; line-height: 1.35;">Launch Chrome in debug mode to enable visual reviews by the Navigation Agent.</p>
+		</div>
+		<div class="setting-row" style="display: flex; flex-direction: column; gap: 4px;">
+			<label style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--vscode-descriptionForeground);">Chrome Profile</label>
+			<select id="chrome-profile-select" style="background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--border-color)); padding: 6px; border-radius: 4px; font-family: var(--font-sans); font-size: 12px; outline: none;">
+				<option value="Default">Default</option>
+			</select>
+		</div>
+		<div class="setting-row" style="display: flex; flex-direction: column; gap: 4px;">
+			<label style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--vscode-descriptionForeground);">Visual Review Model</label>
+			<select id="visual-model-input" style="background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--border-color)); padding: 6px; border-radius: 4px; font-family: var(--font-sans); font-size: 12px; outline: none;">
+				<option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+				<option value="gpt-5-4">gpt-5-4</option>
+				<option value="gpt-5.2">gpt-5.2</option>
+				<option value="gpt-5-codex">gpt-5-codex</option>
+				<option value="custom">Other...</option>
+			</select>
+			<input type="text" id="custom-visual-model-input" placeholder="model-name" style="display: none; margin-top: 4px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--border-color)); padding: 6px; border-radius: 4px; font-family: var(--font-sans); font-size: 12px; outline: none;" title="Enter custom visual model" />
+		</div>
+		<div class="browser-status-row" style="font-size: 12px; display: flex; align-items: center; gap: 6px; margin: 4px 0;">
+			<span style="color: var(--vscode-descriptionForeground);">Status:</span>
+			<span id="browser-status-text" class="status-disconnected" style="color: var(--vscode-errorForeground, #ff6b6b); font-weight: 600;">Disconnected</span>
+		</div>
+		<div class="browser-actions-row" style="display: flex; gap: 8px;">
+			<button id="launch-browser-btn" style="background: var(--accent); color: #ffffff; border: none; padding: 6px 12px; cursor: pointer; border-radius: 4px; font-size: 12px; font-weight: 600; font-family: var(--font-sans); flex: 1; text-align: center;">Launch Browser</button>
+			<button id="check-browser-btn" style="background: var(--vscode-button-secondaryBackground, #5f5f5f); color: var(--vscode-button-secondaryForeground, #ffffff); border: none; padding: 6px 12px; cursor: pointer; border-radius: 4px; font-size: 12px; font-weight: 600; font-family: var(--font-sans); flex: 1; text-align: center;">Check Port 9222</button>
+		</div>
+		<div class="setting-row" style="display: flex; flex-direction: column; gap: 4px; margin-top: 4px;">
+			<label style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--vscode-descriptionForeground);">Quick Navigate Tab</label>
+			<div style="display: flex; gap: 6px;">
+				<input type="text" id="browser-navigate-url" placeholder="http://localhost:3000" style="flex: 1; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--border-color)); padding: 6px; border-radius: 4px; font-family: var(--font-sans); font-size: 12px; outline: none;" />
+				<button id="browser-navigate-btn" style="background: var(--accent); color: #ffffff; border: none; padding: 6px 10px; cursor: pointer; border-radius: 4px; font-size: 12px; font-weight: 600; font-family: var(--font-sans);">Go</button>
+			</div>
+		</div>
 	</div>
 
 	<div id="settings-panel">
@@ -867,6 +992,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 				<option value="Chinese">Chinese</option>
 			</select>
 		</div>
+
 		<button id="save-settings-button">Save Settings</button>
 	</div>
 
@@ -915,7 +1041,22 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 
 	<div id="chat-history"></div>
 
+	<!-- Image Preview Panel -->
+	<div id="image-preview-container" style="display: none; align-items: center; gap: 8px; margin-bottom: 8px; padding: 6px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 6px; position: relative;">
+		<img id="image-preview" style="max-height: 50px; border-radius: 4px;" alt="Preview" />
+		<span id="image-preview-name" style="font-size: 11px; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px;"></span>
+		<button id="image-preview-clear" style="background: none; border: none; color: var(--vscode-errorForeground, #ff6b6b); cursor: pointer; font-size: 14px; font-weight: bold; margin-left: auto; padding: 0 4px;" title="Clear image">&times;</button>
+	</div>
+
 	<div id="input-container">
+		<input type="file" id="image-attachment-input" accept="image/*" style="display: none;" />
+		<button id="attach-image-btn" title="Attach Image">
+			<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
+				<rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+				<circle cx="8.5" cy="8.5" r="1.5"></circle>
+				<polyline points="21 15 16 10 5 21"></polyline>
+			</svg>
+		</button>
 		<input type="text" id="message-input" placeholder="Ask Zelos..." />
 		<select id="model-input" title="Choose AI Model">
 			<option value="gpt-5-5">gpt-5-5</option>
@@ -939,6 +1080,15 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		const input = document.getElementById('message-input');
 		const sendBtn = document.getElementById('send-button');
 		const history = document.getElementById('chat-history');
+
+		const attachBtn = document.getElementById('attach-image-btn');
+		const fileInput = document.getElementById('image-attachment-input');
+		const previewContainer = document.getElementById('image-preview-container');
+		const previewImg = document.getElementById('image-preview');
+		const previewName = document.getElementById('image-preview-name');
+		const previewClear = document.getElementById('image-preview-clear');
+		let attachedImageBase64 = null;
+
 		const settingsToggle = document.getElementById('settings-toggle');
 		const settingsPanel = document.getElementById('settings-panel');
 		const apiKeyInput = document.getElementById('api-key-input');
@@ -953,6 +1103,17 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		const resetBtn = document.getElementById('reset-btn');
 		const creditBadge = document.getElementById('credit-badge');
 		const creditValue = document.getElementById('credit-value');
+
+		const browserToggle = document.getElementById('browser-toggle');
+		const browserPanel = document.getElementById('browser-panel');
+		const chromeProfileSelect = document.getElementById('chrome-profile-select');
+		const browserStatusText = document.getElementById('browser-status-text');
+		const launchBrowserBtn = document.getElementById('launch-browser-btn');
+		const checkBrowserBtn = document.getElementById('check-browser-btn');
+		const browserNavigateUrl = document.getElementById('browser-navigate-url');
+		const browserNavigateBtn = document.getElementById('browser-navigate-btn');
+		const visualModelSelect = document.getElementById('visual-model-input');
+		const customVisualModelInput = document.getElementById('custom-visual-model-input');
 
 		creditBadge.addEventListener('click', () => {
 			creditValue.textContent = '--';
@@ -1062,10 +1223,25 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		}
 
 		// ── UI helpers ──────────────────────
-		function appendMessage(text, cls) {
+		function appendMessage(text, cls, image) {
 			const div = document.createElement('div');
 			div.className = 'msg ' + cls;
-			if (cls === 'msg-user' || cls === 'msg-status' || cls === 'msg-error') {
+			if (cls === 'msg-user') {
+				const textDiv = document.createElement('div');
+				textDiv.textContent = text;
+				div.appendChild(textDiv);
+				if (image) {
+					const img = document.createElement('img');
+					img.src = image;
+					img.style.maxWidth = '100%';
+					img.style.maxHeight = '150px';
+					img.style.borderRadius = '6px';
+					img.style.marginTop = '6px';
+					img.style.display = 'block';
+					img.style.border = '1px solid var(--border-color)';
+					div.appendChild(img);
+				}
+			} else if (cls === 'msg-status' || cls === 'msg-error') {
 				div.textContent = text;
 			} else {
 				div.innerHTML = renderMarkdown(text);
@@ -1163,6 +1339,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			settingsPanel.style.display = settingsPanel.style.display === 'flex' ? 'none' : 'flex';
 			if (settingsPanel.style.display === 'flex') {
 				auditPanel.style.display = 'none';
+				browserPanel.style.display = 'none';
 			}
 		});
 
@@ -1170,6 +1347,16 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			auditPanel.style.display = auditPanel.style.display === 'flex' ? 'none' : 'flex';
 			if (auditPanel.style.display === 'flex') {
 				settingsPanel.style.display = 'none';
+				browserPanel.style.display = 'none';
+			}
+		});
+
+		browserToggle.addEventListener('click', () => {
+			browserPanel.style.display = browserPanel.style.display === 'flex' ? 'none' : 'flex';
+			if (browserPanel.style.display === 'flex') {
+				settingsPanel.style.display = 'none';
+				auditPanel.style.display = 'none';
+				vscode.postMessage({ type: 'checkBrowser' });
 			}
 		});
 
@@ -1229,7 +1416,75 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			}
 		});
 
+		function saveSelectedVisualModel() {
+			let selectedModel = visualModelSelect.value;
+			if (selectedModel === 'custom') {
+				selectedModel = customVisualModelInput.value.trim() || 'gemini-3.5-flash';
+			}
+			vscode.postMessage({
+				type: 'updateVisualModel',
+				value: selectedModel
+			});
+		}
+
+		visualModelSelect.addEventListener('change', () => {
+			if (visualModelSelect.value === 'custom') {
+				customVisualModelInput.style.display = 'block';
+				customVisualModelInput.focus();
+			} else {
+				customVisualModelInput.style.display = 'none';
+				saveSelectedVisualModel();
+			}
+		});
+
+		customVisualModelInput.addEventListener('blur', () => {
+			saveSelectedVisualModel();
+		});
+
+		customVisualModelInput.addEventListener('keypress', (e) => {
+			if (e.key === 'Enter') {
+				saveSelectedVisualModel();
+				customVisualModelInput.blur();
+			}
+		});
+
+		chromeProfileSelect.addEventListener('change', () => {
+			vscode.postMessage({
+				type: 'updateSelectedProfile',
+				value: chromeProfileSelect.value
+			});
+		});
+
+		launchBrowserBtn.addEventListener('click', () => {
+			browserStatusText.textContent = 'Launching...';
+			browserStatusText.className = 'status-disconnected';
+			vscode.postMessage({
+				type: 'launchChrome',
+				profile: chromeProfileSelect.value
+			});
+		});
+
+		checkBrowserBtn.addEventListener('click', () => {
+			browserStatusText.textContent = 'Checking...';
+			vscode.postMessage({ type: 'checkBrowser' });
+		});
+
+		browserNavigateBtn.addEventListener('click', () => {
+			const url = browserNavigateUrl.value.trim();
+			if (url) {
+				vscode.postMessage({ type: 'navigateUrl', value: url });
+			}
+		});
+
+		browserNavigateUrl.addEventListener('keypress', (e) => {
+			if (e.key === 'Enter') browserNavigateBtn.click();
+		});
+
 		saveBtn.addEventListener('click', () => {
+			let visualModel = visualModelSelect.value;
+			if (visualModel === 'custom') {
+				visualModel = customVisualModelInput.value.trim() || 'gemini-3.5-flash';
+			}
 			vscode.postMessage({
 				type: 'saveSettings',
 				apiKey: apiKeyInput.value.trim(),
@@ -1237,7 +1492,9 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 				commandApprovalMode: commandApprovalInput.value,
 				fileApprovalMode: fileApprovalInput.value,
 				communicationLanguage: communicationLanguageInput.value,
-				codeLanguage: codeLanguageInput.value
+				codeLanguage: codeLanguageInput.value,
+				visualModel: visualModel,
+				selectedProfile: chromeProfileSelect.value
 			});
 			autoApproveCheckbox.checked = (fileApprovalInput.value === 'acceptAll');
 			settingsPanel.style.display = 'none';
@@ -1256,6 +1513,32 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			autoApproveCheckbox.checked = (fileApprovalInput.value === 'acceptAll');
 		});
 
+		attachBtn.addEventListener('click', () => {
+			fileInput.click();
+		});
+
+		fileInput.addEventListener('change', (e) => {
+			const file = e.target.files[0];
+			if (!file) return;
+
+			const reader = new FileReader();
+			reader.onload = (evt) => {
+				attachedImageBase64 = evt.target.result;
+				previewImg.src = attachedImageBase64;
+				previewName.textContent = file.name;
+				previewContainer.style.display = 'flex';
+			};
+			reader.readAsDataURL(file);
+		});
+
+		previewClear.addEventListener('click', () => {
+			attachedImageBase64 = null;
+			fileInput.value = '';
+			previewContainer.style.display = 'none';
+			previewImg.src = '';
+			previewName.textContent = '';
+		});
+
 		resetBtn.addEventListener('click', () => {
 			history.innerHTML = '';
 			statusEl = null;
@@ -1264,9 +1547,20 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 
 		sendBtn.addEventListener('click', () => {
 			const text = input.value.trim();
-			if (text) {
-				vscode.postMessage({ type: 'chat', value: text });
+			if (text || attachedImageBase64) {
+				vscode.postMessage({
+					type: 'chat',
+					value: text,
+					image: attachedImageBase64
+				});
 				input.value = '';
+				
+				// Clear attachment
+				attachedImageBase64 = null;
+				fileInput.value = '';
+				previewContainer.style.display = 'none';
+				previewImg.src = '';
+				previewName.textContent = '';
 			}
 		});
 
@@ -1300,6 +1594,16 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 						customModelInput.value = msg.model;
 						customModelInput.style.display = 'block';
 					}
+
+					const stdVisualModels = ['gemini-3.5-flash', 'gpt-5-4', 'gpt-5.2', 'gpt-5-codex'];
+					if (stdVisualModels.includes(msg.visualModel)) {
+						visualModelSelect.value = msg.visualModel;
+						customVisualModelInput.style.display = 'none';
+					} else {
+						visualModelSelect.value = 'custom';
+						customVisualModelInput.value = msg.visualModel;
+						customVisualModelInput.style.display = 'block';
+					}
 					
 					commandApprovalInput.value = msg.commandApprovalMode;
 					fileApprovalInput.value = msg.fileApprovalMode;
@@ -1308,8 +1612,36 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 					codeLanguageInput.value = msg.codeLanguage || 'English';
 					break;
 
+				case 'chromeProfiles':
+					chromeProfileSelect.innerHTML = '';
+					if (msg.profiles && msg.profiles.length > 0) {
+						msg.profiles.forEach(p => {
+							const opt = document.createElement('option');
+							opt.value = p.id;
+							opt.textContent = p.name + ' (' + p.id + ')';
+							chromeProfileSelect.appendChild(opt);
+						});
+					} else {
+						const opt = document.createElement('option');
+						opt.value = 'Default';
+						opt.textContent = 'Default';
+						chromeProfileSelect.appendChild(opt);
+					}
+					break;
+
+				case 'browserStatus':
+					browserStatusText.textContent = msg.message;
+					if (msg.connected) {
+						browserStatusText.className = 'status-connected';
+						browserStatusText.style.color = 'var(--accent)';
+					} else {
+						browserStatusText.className = 'status-disconnected';
+						browserStatusText.style.color = 'var(--vscode-errorForeground, #ff6b6b)';
+					}
+					break;
+
 				case 'userMessage':
-					appendMessage('You: ' + msg.value, 'msg-user');
+					appendMessage('You: ' + msg.value, 'msg-user', msg.image);
 					break;
 
 				case 'response':
@@ -1391,6 +1723,101 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 	</script>
 </body>
 </html>`;
+	}
+
+	private _getChromeProfiles(): { id: string; name: string }[] {
+		const profiles: { id: string; name: string }[] = [];
+		try {
+			let userDataPath = '';
+			if (process.platform === 'win32') {
+				userDataPath = path.join(process.env.LOCALAPPDATA || '', 'Google', 'Chrome', 'User Data');
+			} else if (process.platform === 'darwin') {
+				userDataPath = path.join(process.env.HOME || '', 'Library', 'Application Support', 'Google', 'Chrome');
+			} else {
+				userDataPath = path.join(process.env.HOME || '', '.config', 'google-chrome');
+			}
+
+			const localStatePath = path.join(userDataPath, 'Local State');
+			if (fs.existsSync(localStatePath)) {
+				const fileContent = fs.readFileSync(localStatePath, 'utf8');
+				const localState = JSON.parse(fileContent);
+				const infoCache = localState.profile?.info_cache;
+				if (infoCache) {
+					for (const [dirName, profileInfo] of Object.entries(infoCache)) {
+						const info = profileInfo as any;
+						profiles.push({
+							id: dirName,
+							name: info.name || dirName
+						});
+					}
+				}
+			}
+		} catch (err) {
+			console.error('Error reading Chrome profiles:', err);
+		}
+		if (profiles.length === 0) {
+			profiles.push({ id: 'Default', name: 'Default Profile' });
+		}
+		return profiles;
+	}
+
+	private _getChromeExecutablePath(): string {
+		if (process.platform === 'win32') {
+			const paths = [
+				'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+				'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+				path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe')
+			];
+			for (const p of paths) {
+				if (fs.existsSync(p)) return p;
+			}
+			return 'chrome.exe';
+		} else if (process.platform === 'darwin') {
+			const p = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+			if (fs.existsSync(p)) return p;
+			return 'google-chrome';
+		} else {
+			return 'google-chrome';
+		}
+	}
+
+	private async _checkPort9222(): Promise<boolean> {
+		try {
+			const response = await fetch('http://localhost:9222/json/list');
+			return response.ok;
+		} catch (_) {
+			return false;
+		}
+	}
+
+	private async _launchChrome(profileId: string): Promise<boolean> {
+		const chromePath = this._getChromeExecutablePath();
+		const args = [
+			`--remote-debugging-port=9222`,
+			`--profile-directory=${profileId}`
+		];
+
+		try {
+			vscode.window.showInformationMessage(`Launching Chrome using profile ${profileId}...`);
+			const child = spawn(chromePath, args, {
+				detached: true,
+				stdio: 'ignore'
+			});
+			child.unref();
+
+			// Wait up to 5 seconds for port to open
+			for (let i = 0; i < 10; i++) {
+				await new Promise(resolve => setTimeout(resolve, 500));
+				if (await this._checkPort9222()) {
+					vscode.window.showInformationMessage('Chrome debug port 9222 is active!');
+					return true;
+				}
+			}
+			return false;
+		} catch (err: any) {
+			vscode.window.showErrorMessage(`Failed to launch Chrome: ${err.message}`);
+			return false;
+		}
 	}
 }
 
