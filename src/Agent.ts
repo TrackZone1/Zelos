@@ -1,9 +1,10 @@
 import * as vscode from 'vscode';
 import { ToolExecutor } from './ToolExecutor';
+import { ModelProvider } from './ModelProvider';
 
 // ── Types ────────────────────────────────────────────────────────────
 
-interface ChatMessage {
+export interface ChatMessage {
 	role: 'system' | 'user' | 'assistant';
 	content: string | { type: string; text?: string; image_url?: string }[];
 }
@@ -365,7 +366,7 @@ export class Agent {
 			reqFileApproval = async () => false;
 		}
 
-		const fetchUrl = this._resolveApiUrl(apiUrl, model);
+		const fetchUrl = ModelProvider.resolveApiUrl(apiUrl, model);
 		let codeLeakRetries = 0;
 
 		for (let step = 1; step <= MAX_LOOP_ITERATIONS; step++) {
@@ -374,8 +375,6 @@ export class Agent {
 			// Truncate history if it grew too large
 			this._trimHistory();
 
-			const kieInput = this._buildKieInput(this._history, model);
-
 			let response: Response | undefined;
 			let apiError: any = null;
 			let responseData: any = null;
@@ -383,15 +382,7 @@ export class Agent {
 
 			for (let attempt = 0; attempt <= MAX_API_RETRIES; attempt++) {
 				try {
-					let body: any;
-					if (model === 'gemini-3.5-flash') {
-						body = {
-							contents: await this._buildGeminiContents(this._history),
-							stream: false
-						};
-					} else {
-						body = { model, stream: false, input: kieInput };
-					}
+					const body = await ModelProvider.buildPayload(this._history, model);
 
 					response = await fetch(fetchUrl, {
 						method: 'POST',
@@ -451,12 +442,7 @@ export class Agent {
 			}
 
 			try {
-				let reply: string;
-				if (typeof responseData === 'string') {
-					reply = responseData;
-				} else {
-					reply = this._extractReply(responseData);
-				}
+				const reply = ModelProvider.extractReply(responseData);
 				this._history.push({ role: 'assistant', content: reply });
 
 				// ── Code-leak detection ──
@@ -566,47 +552,6 @@ export class Agent {
 		return message;
 	}
 
-	/** Determines the correct KIE API endpoint based on the model name. */
-	private _resolveApiUrl(baseUrl: string, model: string): string {
-		if (model === 'gemini-3.5-flash') {
-			const cleanUrl = baseUrl.replace(/\/+$/, '');
-			if (cleanUrl.includes('api.kie.ai') || cleanUrl.includes('kie.ai')) {
-				return 'https://api.kie.ai/gemini/v1/models/gemini-3-5-flash:streamGenerateContent';
-			} else {
-				return cleanUrl + '/gemini/v1/models/gemini-3-5-flash:streamGenerateContent';
-			}
-		}
-		if (!baseUrl.includes('api.kie.ai') && !baseUrl.includes('kie.ai')) {
-			return baseUrl;
-		}
-		if (model === 'gpt-5-5') {
-			return 'https://api.kie.ai/codex/v1/responses';
-		}
-		return 'https://api.kie.ai/api/v1/responses';
-	}
-
-	/** Extracts the text reply from the KIE Codex API response format. */
-	private _extractReply(data: any): string {
-		// Gemini format
-		if (data.candidates?.[0]?.content?.parts?.[0]) {
-			const textPart = data.candidates[0].content.parts.find((p: any) => p.text !== undefined);
-			if (textPart) return textPart.text;
-		}
-		// KIE Codex format
-		if (data.output && Array.isArray(data.output)) {
-			const msg = data.output.find((o: any) => o.role === 'assistant');
-			if (msg?.content && Array.isArray(msg.content)) {
-				const text = msg.content.find((c: any) => c.type === 'output_text');
-				if (text) return text.text;
-			}
-		}
-		// OpenAI fallback
-		if (data.choices?.[0]?.message?.content) {
-			return data.choices[0].message.content;
-		}
-		return JSON.stringify(data);
-	}
-
 	/** Formats tool results into a string the model can understand. */
 	private _formatToolFeedback(results: { action: string; status: string; details: string }[]): string {
 		const lines = ['[TOOL RESULTS]'];
@@ -628,158 +573,5 @@ export class Agent {
 		const systemPrompt = this._history[0];
 		const trimmed = this._history.slice(-(MAX_HISTORY_MESSAGES));
 		this._history = [systemPrompt, ...trimmed];
-	}
-
-	/** Builds the structured input array for the KIE API, potentially condensing history. */
-	private _buildKieInput(history: ChatMessage[], model: string) {
-		if (model === 'gpt-5-5') {
-			const systemPrompt = history.find(m => m.role === 'system')?.content || '';
-			const conversationTurns: string[] = [];
-
-			for (const msg of history) {
-				if (msg.role === 'system') continue;
-				const roleLabel = msg.role === 'user' ? 'User' : 'Assistant (Zelos)';
-				if (typeof msg.content === 'string') {
-					conversationTurns.push(`${roleLabel}: ${msg.content}`);
-				} else {
-					let textParts = '';
-					let imageUrls: string[] = [];
-					for (const part of msg.content) {
-						if (part.type === 'input_text' && part.text) {
-							textParts += part.text;
-						} else if (part.type === 'input_image' && part.image_url) {
-							imageUrls.push(part.image_url);
-						}
-					}
-					let turnStr = `${roleLabel}: ${textParts}`;
-					if (imageUrls.length > 0) {
-						turnStr += ` [Attached Images: ${imageUrls.join(', ')}]`;
-					}
-					conversationTurns.push(turnStr);
-				}
-			}
-
-			const condensedPrompt = [
-				systemPrompt,
-				'',
-				'## Conversation History',
-				...conversationTurns,
-				'',
-				'## Instruction',
-				'Continue the task by executing the next step (using tool tags) or reply with a short summary if complete.'
-			].join('\n');
-
-			const contentParts: any[] = [{ type: 'input_text', text: condensedPrompt }];
-			for (const msg of history) {
-				if (msg.role === 'user' && Array.isArray(msg.content)) {
-					for (const part of msg.content) {
-						if (part.type === 'input_image' && part.image_url) {
-							contentParts.push({ type: 'input_image', image_url: part.image_url });
-						}
-					}
-				}
-			}
-
-			return [
-				{
-					role: 'user',
-					content: contentParts
-				}
-			];
-		}
-
-		// Standard multi-turn format for other models
-		return history.map(msg => {
-			if (typeof msg.content === 'string') {
-				return {
-					role: msg.role,
-					content: [{ type: 'input_text', text: msg.content }],
-				};
-			} else {
-				return {
-					role: msg.role,
-					content: msg.content
-				};
-			}
-		});
-	}
-
-	private async _buildGeminiContents(history: ChatMessage[]): Promise<any[]> {
-		const geminiContents: any[] = [];
-		let systemPrompt = '';
-
-		for (const msg of history) {
-			if (msg.role === 'system') {
-				if (typeof msg.content === 'string') {
-					systemPrompt += msg.content + '\n\n';
-				} else {
-					for (const part of msg.content) {
-						if (part.type === 'input_text' && part.text) {
-							systemPrompt += part.text + '\n\n';
-						}
-					}
-				}
-				continue;
-			}
-
-			const role = msg.role === 'assistant' ? 'model' : 'user';
-			const parts: any[] = [];
-
-			if (typeof msg.content === 'string') {
-				let text = msg.content;
-				if (systemPrompt && role === 'user' && geminiContents.length === 0) {
-					text = systemPrompt + text;
-					systemPrompt = '';
-				}
-				parts.push({ text });
-			} else {
-				for (const part of msg.content) {
-					if (part.type === 'input_text' && part.text) {
-						let text = part.text;
-						if (systemPrompt && role === 'user' && geminiContents.length === 0) {
-							text = systemPrompt + text;
-							systemPrompt = '';
-						}
-						parts.push({ text });
-					} else if (part.type === 'input_image' && part.image_url) {
-						if (part.image_url.startsWith('data:')) {
-							const mimeTypeMatch = part.image_url.match(/data:(.*?);base64,/);
-							const base64Data = part.image_url.split(';base64,')[1];
-							if (base64Data) {
-								parts.push({
-									inline_data: {
-										mime_type: mimeTypeMatch ? mimeTypeMatch[1] : 'image/png',
-										data: base64Data
-									}
-								});
-							}
-						} else if (part.image_url.startsWith('http')) {
-							try {
-								const imgRes = await fetch(part.image_url);
-								if (imgRes.ok) {
-									const arrayBuffer = await imgRes.arrayBuffer();
-									const base64Data = Buffer.from(arrayBuffer).toString('base64');
-									const mimeType = imgRes.headers.get('content-type') || 'image/png';
-									parts.push({
-										inline_data: {
-											mime_type: mimeType,
-											data: base64Data
-										}
-									});
-								}
-							} catch (err) {
-								console.error('Failed to download image for Gemini input:', err);
-							}
-						}
-					}
-				}
-			}
-
-			if (parts.length > 0) {
-				geminiContents.push({ role, parts });
-			}
-		}
-
-		return geminiContents;
 	}
 }

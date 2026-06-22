@@ -1,4 +1,6 @@
 import { CDPClient } from './CDPClient';
+import { ModelProvider } from './ModelProvider';
+import { ChatMessage } from './Agent';
 
 interface VisualMessage {
 	role: 'system' | 'user' | 'assistant';
@@ -215,45 +217,12 @@ export class VisualReviewAgent {
 	}
 
 	private async _queryVisualModel(): Promise<string> {
-		const isCustomUrl = !this._apiUrl.includes('api.kie.ai') && !this._apiUrl.includes('kie.ai');
-		let fetchUrl = this._apiUrl;
-		if (this._model === 'gemini-3.5-flash') {
-			const cleanUrl = this._apiUrl.replace(/\/+$/, '');
-			if (cleanUrl.includes('api.kie.ai') || cleanUrl.includes('kie.ai')) {
-				fetchUrl = 'https://api.kie.ai/gemini/v1/models/gemini-3-5-flash:streamGenerateContent';
-			} else {
-				fetchUrl = cleanUrl + '/gemini/v1/models/gemini-3-5-flash:streamGenerateContent';
-			}
-		} else if (!isCustomUrl) {
-			fetchUrl = 'https://api.kie.ai/api/v1/responses';
-		}
-
-		const kieInput = this._history.map(msg => {
-			if (typeof msg.content === 'string') {
-				return {
-					role: msg.role,
-					content: [{ type: 'input_text', text: msg.content }]
-				};
-			} else {
-				return {
-					role: msg.role,
-					content: msg.content
-				};
-			}
-		});
+		const fetchUrl = ModelProvider.resolveApiUrl(this._apiUrl, this._model);
 
 		let delay = 1000;
 		for (let attempt = 0; attempt < 3; attempt++) {
 			try {
-				let body: any;
-				if (this._model === 'gemini-3.5-flash') {
-					body = {
-						contents: await this._buildGeminiContents(this._history),
-						stream: false
-					};
-				} else {
-					body = { model: this._model, stream: false, input: kieInput };
-				}
+				const body = await ModelProvider.buildPayload(this._history as any as ChatMessage[], this._model);
 
 				const response = await fetch(fetchUrl, {
 					method: 'POST',
@@ -271,22 +240,7 @@ export class VisualReviewAgent {
 						if (responseData && (responseData.code === 500 || responseData.code === '500')) {
 							throw new Error(responseData.msg || text);
 						}
-						// Extract response
-						if (responseData.candidates?.[0]?.content?.parts?.[0]) {
-							const textPart = responseData.candidates[0].content.parts.find((p: any) => p.text !== undefined);
-							if (textPart) return textPart.text;
-						}
-						if (responseData.output && Array.isArray(responseData.output)) {
-							const msg = responseData.output.find((o: any) => o.role === 'assistant');
-							if (msg?.content && Array.isArray(msg.content)) {
-								const textBlock = msg.content.find((c: any) => c.type === 'output_text');
-								if (textBlock) return textBlock.text;
-							}
-						}
-						if (responseData.choices?.[0]?.message?.content) {
-							return responseData.choices[0].message.content;
-						}
-						return text;
+						return ModelProvider.extractReply(responseData);
 					} catch (_) {
 						return text;
 					}
@@ -301,85 +255,6 @@ export class VisualReviewAgent {
 			}
 		}
 		throw new Error('API query failed.');
-	}
-
-	private async _buildGeminiContents(history: VisualMessage[]): Promise<any[]> {
-		const geminiContents: any[] = [];
-		let systemPrompt = '';
-
-		for (const msg of history) {
-			if (msg.role === 'system') {
-				if (typeof msg.content === 'string') {
-					systemPrompt += msg.content + '\n\n';
-				} else {
-					for (const part of msg.content) {
-						if (part.type === 'input_text' && part.text) {
-							systemPrompt += part.text + '\n\n';
-						}
-					}
-				}
-				continue;
-			}
-
-			const role = msg.role === 'assistant' ? 'model' : 'user';
-			const parts: any[] = [];
-
-			if (typeof msg.content === 'string') {
-				let text = msg.content;
-				if (systemPrompt && role === 'user' && geminiContents.length === 0) {
-					text = systemPrompt + text;
-					systemPrompt = '';
-				}
-				parts.push({ text });
-			} else {
-				for (const part of msg.content) {
-					if (part.type === 'input_text' && part.text) {
-						let text = part.text;
-						if (systemPrompt && role === 'user' && geminiContents.length === 0) {
-							text = systemPrompt + text;
-							systemPrompt = '';
-						}
-						parts.push({ text });
-					} else if (part.type === 'input_image' && part.image_url) {
-						if (part.image_url.startsWith('data:')) {
-							const mimeTypeMatch = part.image_url.match(/data:(.*?);base64,/);
-							const base64Data = part.image_url.split(';base64,')[1];
-							if (base64Data) {
-								parts.push({
-									inline_data: {
-										mime_type: mimeTypeMatch ? mimeTypeMatch[1] : 'image/png',
-										data: base64Data
-									}
-								});
-							}
-						} else if (part.image_url.startsWith('http')) {
-							try {
-								const imgRes = await fetch(part.image_url);
-								if (imgRes.ok) {
-									const arrayBuffer = await imgRes.arrayBuffer();
-									const base64Data = Buffer.from(arrayBuffer).toString('base64');
-									const mimeType = imgRes.headers.get('content-type') || 'image/png';
-									parts.push({
-										inline_data: {
-											mime_type: mimeType,
-											data: base64Data
-										}
-									});
-								}
-							} catch (err) {
-								console.error('Failed to download image for Gemini input:', err);
-							}
-						}
-					}
-				}
-			}
-
-			if (parts.length > 0) {
-				geminiContents.push({ role, parts });
-			}
-		}
-
-		return geminiContents;
 	}
 
 	private _parseActions(text: string): { type: string; selector?: string; text?: string; url?: string; direction?: 'up' | 'down'; ms?: number }[] {

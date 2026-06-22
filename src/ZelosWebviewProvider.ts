@@ -917,9 +917,29 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			<label style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--vscode-descriptionForeground);">Visual Review Model</label>
 			<select id="visual-model-input" style="background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--border-color)); padding: 6px; border-radius: 4px; font-family: var(--font-sans); font-size: 12px; outline: none;">
 				<option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+				<option value="gemini-3-flash-v1beta">Gemini 3 Flash (v1beta)</option>
+				<option value="gemini-2.5-pro-openai">Gemini 2.5 Pro (openai)</option>
+				<option value="gemini-3-pro-openai">Gemini 3 Pro (openai)</option>
+				<option value="gemini-3.1-pro-openai">Gemini 3.1 Pro (openai)</option>
+				<option value="gemini-2.5-flash-openai">Gemini 2.5 Flash (openai)</option>
+				<option value="gemini-3-flash-openai">Gemini 3 Flash (openai)</option>
+				<option value="gemini-3.5-flash-openai">Gemini 3.5 Flash (openai)</option>
+				<option value="gpt-5-5">gpt-5-5</option>
 				<option value="gpt-5-4">gpt-5-4</option>
-				<option value="gpt-5.2">gpt-5.2</option>
+				<option value="gpt-5-2">gpt-5-2</option>
 				<option value="gpt-5-codex">gpt-5-codex</option>
+				<option value="gpt-5.1-codex">gpt-5.1-codex</option>
+				<option value="gpt-5.2-codex">gpt-5.2-codex</option>
+				<option value="gpt-5.3-codex">gpt-5.3-codex</option>
+				<option value="gpt-5.4-codex">gpt-5.4-codex</option>
+				<option value="claude-opus-4-7">Claude Opus 4.7</option>
+				<option value="claude-opus-4-8">Claude Opus 4.8</option>
+				<option value="cluade-fable-5">Claude Fable 5</option>
+				<option value="claude-haiku-4-5">Claude Haiku 4.5</option>
+				<option value="claude-opus-4-5">Claude Opus 4.5</option>
+				<option value="claude-opus-4-6">Claude Opus 4.6</option>
+				<option value="claude-sonnet-4-5">Claude Sonnet 4.5</option>
+				<option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
 				<option value="custom">Other...</option>
 			</select>
 			<input type="text" id="custom-visual-model-input" placeholder="model-name" style="display: none; margin-top: 4px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--border-color)); padding: 6px; border-radius: 4px; font-family: var(--font-sans); font-size: 12px; outline: none;" title="Enter custom visual model" />
@@ -1060,8 +1080,29 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		<input type="text" id="message-input" placeholder="Ask Zelos..." />
 		<select id="model-input" title="Choose AI Model">
 			<option value="gpt-5-5">gpt-5-5</option>
+			<option value="gpt-5-4">gpt-5-4</option>
+			<option value="gpt-5-2">gpt-5-2</option>
 			<option value="gpt-5-codex">gpt-5-codex</option>
 			<option value="gpt-5.1-codex">gpt-5.1-codex</option>
+			<option value="gpt-5.2-codex">gpt-5.2-codex</option>
+			<option value="gpt-5.3-codex">gpt-5.3-codex</option>
+			<option value="gpt-5.4-codex">gpt-5.4-codex</option>
+			<option value="claude-opus-4-7">claude-opus-4-7</option>
+			<option value="claude-opus-4-8">claude-opus-4-8</option>
+			<option value="cluade-fable-5">cluade-fable-5</option>
+			<option value="claude-haiku-4-5">claude-haiku-4-5</option>
+			<option value="claude-opus-4-5">claude-opus-4-5</option>
+			<option value="claude-opus-4-6">claude-opus-4-6</option>
+			<option value="claude-sonnet-4-5">claude-sonnet-4-5</option>
+			<option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
+			<option value="gemini-3.5-flash">gemini-3.5-flash</option>
+			<option value="gemini-3-flash-v1beta">gemini-3-flash-v1beta</option>
+			<option value="gemini-2.5-pro-openai">gemini-2.5-pro (openai)</option>
+			<option value="gemini-3-pro-openai">gemini-3-pro (openai)</option>
+			<option value="gemini-3.1-pro-openai">gemini-3.1-pro (openai)</option>
+			<option value="gemini-2.5-flash-openai">gemini-2.5-flash (openai)</option>
+			<option value="gemini-3-flash-openai">gemini-3-flash (openai)</option>
+			<option value="gemini-3.5-flash-openai">gemini-3.5-flash (openai)</option>
 			<option value="custom">Other...</option>
 		</select>
 		<input type="text" id="custom-model-input" placeholder="model-name" style="display: none;" title="Enter custom model" />
@@ -1585,7 +1626,12 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 					apiKeyInput.value = msg.apiKey;
 					apiUrlInput.value = msg.apiUrl;
 					
-					const stdModels = ['gpt-5-5', 'gpt-5-codex', 'gpt-5.1-codex'];
+					const stdModels = [
+						'gpt-5-5', 'gpt-5-4', 'gpt-5-2', 'gpt-5-codex', 'gpt-5.1-codex', 'gpt-5.2-codex', 'gpt-5.3-codex', 'gpt-5.4-codex',
+						'claude-opus-4-7', 'claude-opus-4-8', 'cluade-fable-5', 'claude-haiku-4-5', 'claude-opus-4-5', 'claude-opus-4-6', 'claude-sonnet-4-5', 'claude-sonnet-4-6',
+						'gemini-3.5-flash', 'gemini-3-flash-v1beta',
+						'gemini-2.5-pro-openai', 'gemini-3-pro-openai', 'gemini-3.1-pro-openai', 'gemini-2.5-flash-openai', 'gemini-3-flash-openai', 'gemini-3.5-flash-openai'
+					];
 					if (stdModels.includes(msg.model)) {
 						modelSelect.value = msg.model;
 						customModelInput.style.display = 'none';
@@ -1595,7 +1641,12 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 						customModelInput.style.display = 'block';
 					}
 
-					const stdVisualModels = ['gemini-3.5-flash', 'gpt-5-4', 'gpt-5.2', 'gpt-5-codex'];
+					const stdVisualModels = [
+						'gemini-3.5-flash', 'gemini-3-flash-v1beta',
+						'gemini-2.5-pro-openai', 'gemini-3-pro-openai', 'gemini-3.1-pro-openai', 'gemini-2.5-flash-openai', 'gemini-3-flash-openai', 'gemini-3.5-flash-openai',
+						'gpt-5-5', 'gpt-5-4', 'gpt-5-2', 'gpt-5-codex', 'gpt-5.1-codex', 'gpt-5.2-codex', 'gpt-5.3-codex', 'gpt-5.4-codex',
+						'claude-opus-4-7', 'claude-opus-4-8', 'cluade-fable-5', 'claude-haiku-4-5', 'claude-opus-4-5', 'claude-opus-4-6', 'claude-sonnet-4-5', 'claude-sonnet-4-6'
+					];
 					if (stdVisualModels.includes(msg.visualModel)) {
 						visualModelSelect.value = msg.visualModel;
 						customVisualModelInput.style.display = 'none';
