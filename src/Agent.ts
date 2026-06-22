@@ -580,12 +580,66 @@ export class Agent {
 		return lines.join('\n');
 	}
 
-	/** Keeps history within MAX_HISTORY_MESSAGES (system prompt is always kept). */
+	/** Keeps history within MAX_HISTORY_MESSAGES and compacts older messages to save tokens. */
 	private _trimHistory() {
+		// First, do a pass to compact older messages to save tokens
+		// We keep the last 4 messages fully intact (e.g., 2 user turns and 2 assistant turns)
+		const retainFullCount = 4;
+		if (this._history.length > retainFullCount + 1) { // +1 for the system prompt
+			for (let i = 1; i < this._history.length - retainFullCount; i++) {
+				const msg = this._history[i];
+				
+				if (msg.role === 'user') {
+					if (typeof msg.content === 'string') {
+						msg.content = this._compactUserMessage(msg.content);
+					} else if (Array.isArray(msg.content)) {
+						for (const part of msg.content) {
+							if (part.type === 'input_text' && part.text) {
+								part.text = this._compactUserMessage(part.text);
+							}
+						}
+					}
+				} else if (msg.role === 'assistant' && typeof msg.content === 'string') {
+					// Compact <create_file> bodies
+					msg.content = msg.content.replace(/(<create_file[^>]*>)([\s\S]*?)(<\/create_file>)/g, '$1\n...[COMPACTED TO SAVE TOKENS]...\n$3');
+				}
+			}
+		}
+
 		if (this._history.length <= MAX_HISTORY_MESSAGES + 1) return;
 
 		const systemPrompt = this._history[0];
 		const trimmed = this._history.slice(-(MAX_HISTORY_MESSAGES));
 		this._history = [systemPrompt, ...trimmed];
+	}
+
+	private _compactUserMessage(content: string): string {
+		let newContent = content;
+		// 1. Compact [TOOL RESULTS] Output
+		if (newContent.includes('[TOOL RESULTS]')) {
+			const lines = newContent.split('\n');
+			const compactedLines: string[] = [];
+			let inOutput = false;
+			
+			for (const line of lines) {
+				if (line.startsWith('Output:')) {
+					inOutput = true;
+					compactedLines.push('Output:\n[COMPACTED TO SAVE TOKENS]');
+				} else if (line === '---') {
+					inOutput = false;
+					compactedLines.push(line);
+				} else if (!inOutput) {
+					compactedLines.push(line);
+				}
+			}
+			newContent = compactedLines.join('\n');
+		}
+		
+		// 2. Compact initial Active file text
+		if (newContent.includes('[Active file:')) {
+			newContent = newContent.replace(/\[Active file: ([^\]]+)\]\n[\s\S]*?(?=\n\n\[IMPORTANT:|$)/, '[Active file: $1]\n...[file content compacted to save tokens]...');
+		}
+		
+		return newContent;
 	}
 }

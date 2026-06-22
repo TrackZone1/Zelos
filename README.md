@@ -36,6 +36,8 @@ Running autonomous AI agents typically consumes a massive amount of tokens due t
   - **Automated Code Review**: Flags bugs, anti-patterns, and vulnerabilities.
   - **Cognitive Complexity Audit**: Evaluates functions and methods against a customizable cognitive complexity threshold (e.g., nesting, logical branches) and plans refactorings.
   - **Self-Critique & Auto-Correction**: Autonomously corrects detected flaws or failing tests by modifying the workspace and re-running the test suite.
+- **🗜️ Token-Saving Conversation Compaction**:
+  - Zelos intelligently compacts verbose tool outputs and older message histories. This drastically reduces the context size for longer conversations, lowering API costs while maintaining reasoning memory.
 - **🎨 Premium Chat Webview**: A highly responsive, custom-styled Outfit/Fira Code interface with real-time streaming status updates, interactive tool execution logs, and easy configurations.
 - **💰 Real-Time Credit Balance**: Track your KIE API account credit balance directly inside the webview panel top bar with a click-to-refresh badge.
 
