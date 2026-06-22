@@ -229,6 +229,10 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 					this._updateCredits();
 					break;
 				}
+				case 'stopChat': {
+					this._agent.stop();
+					break;
+				}
 			}
 		});
 	}
@@ -261,7 +265,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		const apiKey = config.get<string>('api.key') || '';
 
 		if (!apiKey) {
-			this._view?.webview.postMessage({ type: 'creditUpdate', value: null });
+			this._view?.webview.postMessage({ type: 'creditUpdate', value: 'missing-key' });
 			return;
 		}
 
@@ -393,6 +397,15 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		}
 		#credit-badge:active {
 			transform: translateY(0);
+		}
+		#credit-badge.missing-key {
+			background: linear-gradient(135deg, rgba(229, 57, 53, 0.15), rgba(229, 57, 53, 0.05));
+			border-color: rgba(229, 57, 53, 0.3);
+			color: var(--vscode-errorForeground, #ff6b6b);
+		}
+		#credit-badge.missing-key:hover {
+			background: linear-gradient(135deg, rgba(229, 57, 53, 0.25), rgba(229, 57, 53, 0.1));
+			box-shadow: 0 2px 8px rgba(229, 57, 53, 0.25);
 		}
 		.top-btn {
 			background: none;
@@ -894,7 +907,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		<div id="credit-badge" title="Click to refresh balance">
 			<span class="credit-icon" style="display: inline-block; vertical-align: middle;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v12M15 9H11.5a2.5 2.5 0 0 0 0 5h3a2.5 2.5 0 0 1 0 5H9"></path></svg></span>
 			<span id="credit-value">--</span>
-			<span style="font-size: 10px; opacity: 0.8; font-weight: 400;">credits</span>
+			<span id="credit-label" style="font-size: 10px; opacity: 0.8; font-weight: 400;">credits</span>
 		</div>
 		<button class="top-btn" id="reset-btn" title="New conversation"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg> Reset</button>
 		<button class="top-btn" id="settings-toggle" title="Settings"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg> Settings</button>
@@ -1113,6 +1126,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			</label>
 		</div>
 		<button id="send-button">Send</button>
+		<button id="stop-button" style="display: none; background: var(--vscode-errorForeground, #ff6b6b); color: #ffffff; border: none; padding: 8px 16px; cursor: pointer; border-radius: 4px; font-size: 13px; font-family: var(--font-sans); font-weight: 600; transition: all 0.2s ease;">Stop</button>
 	</div>
 
 	<script nonce="${nonce}">
@@ -1120,6 +1134,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 
 		const input = document.getElementById('message-input');
 		const sendBtn = document.getElementById('send-button');
+		const stopBtn = document.getElementById('stop-button');
 		const history = document.getElementById('chat-history');
 
 		const attachBtn = document.getElementById('attach-image-btn');
@@ -1157,8 +1172,15 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		const customVisualModelInput = document.getElementById('custom-visual-model-input');
 
 		creditBadge.addEventListener('click', () => {
-			creditValue.textContent = '--';
-			vscode.postMessage({ type: 'refreshCredits' });
+			if (creditBadge.classList.contains('missing-key')) {
+				settingsPanel.style.display = 'flex';
+				auditPanel.style.display = 'none';
+				browserPanel.style.display = 'none';
+				apiKeyInput.focus();
+			} else {
+				creditValue.textContent = '--';
+				vscode.postMessage({ type: 'refreshCredits' });
+			}
 		});
 		const autoApproveCheckbox = document.getElementById('auto-approve-file-checkbox');
 		const auditToggle = document.getElementById('audit-toggle');
@@ -1314,6 +1336,13 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		function setLocked(locked) {
 			input.disabled = locked;
 			sendBtn.disabled = locked;
+			if (locked) {
+				sendBtn.style.display = 'none';
+				stopBtn.style.display = 'block';
+			} else {
+				sendBtn.style.display = 'block';
+				stopBtn.style.display = 'none';
+			}
 		}
 
 		// ── Helper handlers ──
@@ -1605,6 +1634,10 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			}
 		});
 
+		stopBtn.addEventListener('click', () => {
+			vscode.postMessage({ type: 'stopChat' });
+		});
+
 		input.addEventListener('keypress', (e) => {
 			if (e.key === 'Enter' && !sendBtn.disabled) sendBtn.click();
 		});
@@ -1614,9 +1647,18 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			const msg = event.data;
 			switch (msg.type) {
 				case 'creditUpdate':
-					if (msg.value !== null && msg.value !== undefined) {
-						creditValue.textContent = msg.value;
+					if (msg.value === 'missing-key') {
+						creditValue.textContent = 'Key Required';
+						creditBadge.classList.add('missing-key');
 						creditBadge.style.display = 'flex';
+						const label = document.getElementById('credit-label');
+						if (label) label.style.display = 'none';
+					} else if (msg.value !== null && msg.value !== undefined) {
+						creditValue.textContent = msg.value;
+						creditBadge.classList.remove('missing-key');
+						creditBadge.style.display = 'flex';
+						const label = document.getElementById('credit-label');
+						if (label) label.style.display = 'inline';
 					} else {
 						creditBadge.style.display = 'none';
 					}

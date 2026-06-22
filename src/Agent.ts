@@ -16,7 +16,7 @@ export interface AgentEvent {
 
 // ── Constants ────────────────────────────────────────────────────────
 
-const MAX_LOOP_ITERATIONS = 10;
+const MAX_LOOP_ITERATIONS = Number.MAX_SAFE_INTEGER;
 const MAX_HISTORY_MESSAGES = 40;
 const MAX_CODE_LEAK_RETRIES = 2;
 const MAX_API_RETRIES = 3;
@@ -94,6 +94,7 @@ export class Agent {
 	private _requestCommandApproval: (command: string) => Promise<boolean>;
 	private _requestFileApproval: (path: string, content: string) => Promise<boolean>;
 	private _busy = false;
+	private _stopped = false;
 
 	constructor(
 		emit: (event: AgentEvent) => void,
@@ -113,6 +114,13 @@ export class Agent {
 		this._emit({ type: 'status', message: '*(Conversation reset)*' });
 	}
 
+	public stop() {
+		if (this._busy) {
+			this._stopped = true;
+			this._emit({ type: 'status', message: 'Stopping...' });
+		}
+	}
+
 	public async handleUserMessage(message: string, base64Image?: string) {
 		if (this._busy) {
 			this._emit({ type: 'error', message: 'Zelos is still working on the previous request. Please wait.' });
@@ -120,6 +128,7 @@ export class Agent {
 		}
 
 		this._busy = true;
+		this._stopped = false;
 		this._emit({ type: 'lock', message: '' });
 
 		try {
@@ -210,6 +219,7 @@ export class Agent {
 		}
 
 		this._busy = true;
+		this._stopped = false;
 		this._emit({ type: 'lock', message: '' });
 
 		try {
@@ -370,7 +380,11 @@ export class Agent {
 		let codeLeakRetries = 0;
 
 		for (let step = 1; step <= MAX_LOOP_ITERATIONS; step++) {
-			this._emit({ type: 'status', message: `Thinking... (step ${step}/${MAX_LOOP_ITERATIONS})` });
+			if (this._stopped) {
+				this._emit({ type: 'error', message: 'Zelos was stopped by the user.' });
+				break;
+			}
+			this._emit({ type: 'status', message: 'Thinking...' });
 
 			// Truncate history if it grew too large
 			this._trimHistory();
