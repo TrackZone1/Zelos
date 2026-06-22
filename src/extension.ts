@@ -7,7 +7,11 @@ export function activate(context: vscode.ExtensionContext) {
 	const provider = new ZelosWebviewProvider(context.extensionUri);
 
 	context.subscriptions.push(
-		vscode.window.registerWebviewViewProvider(ZelosWebviewProvider.viewType, provider)
+		vscode.window.registerWebviewViewProvider(ZelosWebviewProvider.viewType, provider, {
+			webviewOptions: {
+				retainContextWhenHidden: true
+			}
+		})
 	);
 
 	const disposable = vscode.commands.registerCommand('zelos.start', () => {
