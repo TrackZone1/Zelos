@@ -20,6 +20,20 @@ const BLOCKED_COMMANDS = [
 	'reboot',
 ];
 
+function decodeXmlEntities(str: string): string {
+	return str
+		.replace(/&quot;/g, '"')
+		.replace(/&apos;/g, "'")
+		.replace(/&amp;/g, '&')
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/&#34;/g, '"')
+		.replace(/&#39;/g, "'")
+		.replace(/&#38;/g, '&')
+		.replace(/&#60;/g, '<')
+		.replace(/&#62;/g, '>');
+}
+
 export interface ToolResult {
 	action: string;
 	status: 'success' | 'error';
@@ -121,7 +135,7 @@ export class ToolExecutor {
 		let match;
 
 		while ((match = regex.exec(reply)) !== null) {
-			const filePath = match[1];
+			const filePath = decodeXmlEntities(match[1]);
 			let content = match[2];
 
 			// Trim leading/trailing newline added by the model
@@ -184,7 +198,7 @@ export class ToolExecutor {
 		let match;
 
 		while ((match = regex.exec(reply)) !== null) {
-			const command = match[1];
+			const command = decodeXmlEntities(match[1]);
 			const res = await this._runSingleCommand(command, match[0], workspacePath, requestApproval);
 			results.push(res);
 		}
@@ -257,7 +271,7 @@ export class ToolExecutor {
 		let match;
 
 		while ((match = regex.exec(reply)) !== null) {
-			const filePath = match[1];
+			const filePath = decodeXmlEntities(match[1]);
 			const res = await this._readSingleFile(filePath, match[0], workspaceRoot);
 			results.push(res);
 		}
@@ -302,7 +316,7 @@ export class ToolExecutor {
 		let match;
 
 		while ((match = regex.exec(reply)) !== null) {
-			const dirPath = match[1] || '.';
+			const dirPath = decodeXmlEntities(match[1] || '.');
 			const res = await this._listSingleDir(dirPath, match[0], workspaceRoot);
 			results.push(res);
 		}
@@ -355,8 +369,8 @@ export class ToolExecutor {
 		let match;
 
 		while ((match = regex.exec(reply)) !== null) {
-			const name = match[1];
-			const argStr = match[3];
+			const name = decodeXmlEntities(match[1]);
+			const argStr = decodeXmlEntities(match[3]);
 			const rawMatch = match[0];
 
 			// Parse arguments
@@ -416,8 +430,8 @@ export class ToolExecutor {
 		let match;
 
 		while ((match = regex.exec(reply)) !== null) {
-			const url = match[1];
-			const instruction = match[2];
+			const url = decodeXmlEntities(match[1]);
+			const instruction = decodeXmlEntities(match[2]);
 			const rawMatch = match[0];
 
 			const res = await this._runVisualReview(url, instruction, rawMatch, emitStatus);

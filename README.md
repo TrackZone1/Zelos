@@ -1,15 +1,17 @@
 <p align="center">
-  <img src="https://kie.ai/logo.png" alt="KIE Logo" width="120px" style="border-radius: 8px;" />
+  <a href="https://kie.ai?ref=69126d09c7c87c2774b3f82280350c4c">
+    <img src="https://kie.ai/logo.png" alt="KIE Logo" width="120px" style="border-radius: 8px;" />
+  </a>
 </p>
 
 # Zelos
 
-> **Zelos** is an autonomous AI coding agent extension for Visual Studio Code using the [KIE API](https://kie.ai/).
+> **Zelos** is an autonomous AI coding agent extension for Visual Studio Code using the [KIE API](https://kie.ai?ref=69126d09c7c87c2774b3f82280350c4c).
 
 Zelos operates in an autonomous loop inside your workspace, utilizing advanced capabilities to analyze files, run tests, critique code, and automatically refactor or implement features based on your instructions.
 
 ### 💰 Extremely Cost-Effective Agentic Loops
-Running autonomous AI agents typically consumes a massive amount of tokens due to continuous reasoning, context injection, and iterative tool steps. Zelos is built exclusively for the **KIE API**, which provides high-performance models at prices **30% to 80% cheaper** than official APIs. This makes running complex autonomous agent loops highly affordable and accessible for everyday development.
+Running autonomous AI agents typically consumes a massive amount of tokens due to continuous reasoning, context injection, and iterative tool steps. Zelos is built exclusively for the [KIE API](https://kie.ai?ref=69126d09c7c87c2774b3f82280350c4c), which provides high-performance models at prices **30% to 80% cheaper** than official APIs. This makes running complex autonomous agent loops highly affordable and accessible for everyday development.
 
 ---
 
@@ -35,6 +37,7 @@ Running autonomous AI agents typically consumes a massive amount of tokens due t
   - **Cognitive Complexity Audit**: Evaluates functions and methods against a customizable cognitive complexity threshold (e.g., nesting, logical branches) and plans refactorings.
   - **Self-Critique & Auto-Correction**: Autonomously corrects detected flaws or failing tests by modifying the workspace and re-running the test suite.
 - **🎨 Premium Chat Webview**: A highly responsive, custom-styled Outfit/Fira Code interface with real-time streaming status updates, interactive tool execution logs, and easy configurations.
+- **💰 Real-Time Credit Balance**: Track your KIE API account credit balance directly inside the webview panel top bar with a click-to-refresh badge.
 
 ---
 
@@ -44,7 +47,7 @@ Running autonomous AI agents typically consumes a massive amount of tokens due t
 
 - VS Code `^1.80.0`
 - Node.js & npm (for compiling and executing actions)
-- A valid **KIE API Key** from [KIE.ai](https://kie.ai/)
+- A valid **KIE API Key** from [KIE.ai](https://kie.ai?ref=69126d09c7c87c2774b3f82280350c4c)
 
 ### Setup
 
@@ -75,8 +78,8 @@ Open VS Code settings (`Ctrl+,` or `Cmd+,`) and search for **Zelos** to configur
 | `zelos.api.model` | `string` | `gpt-5-5` | The LLM model used (e.g. `gpt-5-5`, `gpt-5-codex`). |
 | `zelos.commandApprovalMode`| `enum` | `prompt` | Approval strategy for running terminal commands (`prompt` \| `acceptAll` \| `rejectAll`). |
 | `zelos.fileApprovalMode` | `enum` | `prompt` | Approval strategy for modifying workspace files (`prompt` \| `acceptAll` \| `rejectAll`). |
-| `zelos.communicationLanguage` | `enum` | `English` | Language used for conversational communication with the agent (`English` \| `French`). |
-| `zelos.codeLanguage` | `enum` | `English` | Language applied for comments, variable naming, and documentation in the generated code (`English` \| `French`). |
+| `zelos.communicationLanguage` | `enum` | `English` | Language used for conversational communication with the agent (`English` \| `French` \| `Spanish` \| `German` \| `Italian` \| `Portuguese` \| `Japanese` \| `Chinese`). |
+| `zelos.codeLanguage` | `enum` | `English` | Language applied for comments, variable naming, and documentation in the generated code (`English` \| `French` \| `Spanish` \| `German` \| `Italian` \| `Portuguese` \| `Japanese` \| `Chinese`). |
 | `zelos.api.visualModel` | `string` | `gemini-3.5-flash` | The model used for visual review and page navigation (e.g. `gemini-3.5-flash`, `gpt-5-4`). |
 | `zelos.chrome.selectedProfile` | `string` | `Default` | Chrome profile directory to launch for debugging. |
 
