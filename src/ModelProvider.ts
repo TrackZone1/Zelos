@@ -53,15 +53,18 @@ export class ModelProvider {
 			return baseUrl;
 		}
 
-		// 1. Gemini Native Models
+		// 1. Gemini Native Models (Non-streaming generateContent endpoint)
 		if (model === 'gemini-3.5-flash') {
-			return 'https://api.kie.ai/gemini/v1/models/gemini-3-5-flash:streamGenerateContent';
+			return 'https://api.kie.ai/gemini/v1/models/gemini-3-5-flash:generateContent';
 		}
 		if (model === 'gemini-3-flash-v1betamodels' || model === 'gemini-3-flash-v1beta') {
-			return 'https://api.kie.ai/gemini/v1/models/gemini-3-flash-v1betamodels:streamGenerateContent';
+			return 'https://api.kie.ai/gemini/v1/models/gemini-3-flash-v1betamodels:generateContent';
 		}
 
 		// 2. Gemini OpenAI-compatible Models
+		if (model === 'gemini-3.5-flash-openai' || model === 'gemini-3-5-flash-openai') {
+			return 'https://api.kie.ai/gemini-3-5-flash-openai/v1/chat/completions';
+		}
 		if (model.startsWith('gemini-') && model.endsWith('-openai')) {
 			const actualModel = model.replace('-openai', '').replace('2.5', '2.5').replace('3.5', '3-5');
 			return `https://api.kie.ai/${actualModel}/v1/chat/completions`;
@@ -69,9 +72,6 @@ export class ModelProvider {
 		// Also support if it is already in standard format (e.g. gemini-2.5-pro or gemini-3.5-flash-openai)
 		if (model === 'gemini-2.5-pro' || model === 'gemini-3-pro' || model === 'gemini-3.1-pro' || model === 'gemini-2.5-flash' || model === 'gemini-3-flash') {
 			return `https://api.kie.ai/${model}/v1/chat/completions`;
-		}
-		if (model === 'gemini-3-5-flash-openai') {
-			return `https://api.kie.ai/gemini-3-5-flash-openai/v1/chat/completions`;
 		}
 
 		// 3. Claude Models
@@ -102,17 +102,40 @@ export class ModelProvider {
 
 		// ── 1. Gemini Native ──────────────────────────────────────────────
 		if (modelDetails.family === 'gemini-native') {
+			const systemMessage = history.find(m => m.role === 'system');
+			let systemInstruction: any = undefined;
+			if (systemMessage) {
+				const systemText = typeof systemMessage.content === 'string'
+					? systemMessage.content
+					: systemMessage.content.map(p => p.text).join('\n');
+				systemInstruction = {
+					parts: [{ text: systemText.trim() }]
+				};
+			}
+
+			const nonSystemHistory = history.filter(m => m.role !== 'system');
 			return {
-				contents: await this._buildGeminiContents(history),
+				contents: await this._buildGeminiContents(nonSystemHistory),
+				systemInstruction,
 				stream: false
 			};
 		}
 
 		// ── 2. Claude ─────────────────────────────────────────────────────
 		if (modelDetails.family === 'claude') {
-			const { messages, system } = this._buildOpenAiLikeMessages(history, true);
+			const systemMessage = history.find(m => m.role === 'system');
+			let systemText: string | undefined = undefined;
+			if (systemMessage) {
+				systemText = typeof systemMessage.content === 'string'
+					? systemMessage.content
+					: systemMessage.content.map(p => p.text).join('\n');
+			}
+
+			const nonSystemHistory = history.filter(m => m.role !== 'system');
+			const { messages } = this._buildOpenAiLikeMessages(nonSystemHistory, false);
 			return {
 				model: model === 'gemini-3-flash-v1beta' ? 'gemini-3-flash-v1beta' : model,
+				system: systemText?.trim(),
 				messages,
 				stream: false,
 				max_tokens: 4096
