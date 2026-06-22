@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { ToolExecutor } from './ToolExecutor';
 import { ModelProvider } from './ModelProvider';
+import { CriticAgent, CriticSubAgent, CriticResult } from './CriticAgent';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -10,8 +11,9 @@ export interface ChatMessage {
 }
 
 export interface AgentEvent {
-	type: 'status' | 'response' | 'tool_action' | 'error' | 'lock' | 'unlock';
+	type: 'status' | 'response' | 'tool_action' | 'error' | 'lock' | 'unlock' | 'critic_review';
 	message: string;
+	criticResults?: CriticResult[];
 }
 
 // ── Constants ────────────────────────────────────────────────────────
@@ -95,6 +97,8 @@ export class Agent {
 	private _requestFileApproval: (path: string, content: string) => Promise<boolean>;
 	private _busy = false;
 	private _stopped = false;
+	private _criticAgent: CriticAgent;
+	private _lastUserMessage = '';
 
 	constructor(
 		emit: (event: AgentEvent) => void,
@@ -105,7 +109,13 @@ export class Agent {
 		this._requestCommandApproval = requestCommandApproval;
 		this._requestFileApproval = requestFileApproval;
 		this._toolExecutor = new ToolExecutor();
+		this._criticAgent = new CriticAgent();
 		this._resetHistory();
+	}
+
+	/** Updates the list of critic sub-agents. */
+	public setCriticSubAgents(agents: CriticSubAgent[]) {
+		this._criticAgent.setSubAgents(agents);
 	}
 
 	/** Clears conversation history and re-injects the system prompt. */
@@ -148,6 +158,7 @@ export class Agent {
 			}
 
 			this._history.push({ role: 'user', content: finalContent });
+			this._lastUserMessage = message;
 
 			await this._runAgentLoop();
 		} finally {
@@ -378,6 +389,7 @@ export class Agent {
 
 		const fetchUrl = ModelProvider.resolveApiUrl(apiUrl, model);
 		let codeLeakRetries = 0;
+		let criticCorrectionsCount = 0;
 
 		for (let step = 1; step <= MAX_LOOP_ITERATIONS; step++) {
 			if (this._stopped) {
@@ -412,7 +424,7 @@ export class Agent {
 						let hasError = false;
 						try {
 							responseData = JSON.parse(text);
-							if (responseData && (responseData.code === 500 || responseData.code === '500' || (responseData.msg && responseData.msg.toLowerCase().includes('server exception')))) {
+							if (responseData && responseData.code && responseData.code !== 200 && responseData.code !== '200') {
 								hasError = true;
 								apiError = new Error(responseData.msg || text);
 							}
@@ -502,6 +514,75 @@ export class Agent {
 					// No tools → final answer
 					// Truncate if suspiciously long (model might still be leaking code)
 					const finalMessage = this._sanitizeFinalResponse(uiMessage);
+
+					// ── Critic Sub-Agent Reviews ──
+					let doAutoCorrection = false;
+
+					if (this._criticAgent.hasActiveAgents()) {
+						try {
+							const criticResults = await this._criticAgent.reviewResponse(
+								reply,
+								this._lastUserMessage,
+								(status) => this._emit({ type: 'status', message: status })
+							);
+
+							if (criticResults.length > 0) {
+								this._emit({
+									type: 'critic_review',
+									message: '',
+									criticResults
+								});
+
+								const hasSevereIssues = criticResults.some(
+									cr => cr.severity === 'warning' || cr.severity === 'critical'
+								);
+
+								if (hasSevereIssues && criticCorrectionsCount < 1) {
+									doAutoCorrection = true;
+									criticCorrectionsCount++;
+
+									const criticSummary = criticResults.map(cr =>
+										`[Critic: ${cr.agentName} (${cr.role})] [${cr.severity}] ${cr.critique}`
+									).join('\n---\n');
+
+									this._history.push({
+										role: 'user',
+										content: [
+											'[CRITIC AGENT WARNINGS/CRITICAL ISSUES DETECTED]',
+											'The following issues were identified by critic sub-agents in your proposed response:',
+											criticSummary,
+											'Please fix these issues using the appropriate tools, or if you choose to ignore them, explain why in your next response.',
+										].join('\n')
+									});
+
+									this._emit({
+										type: 'status',
+										message: 'Critic agents flagged issues. Zelos is attempting to correct...'
+									});
+								} else {
+									const criticSummary = criticResults.map(cr =>
+										`[Critic: ${cr.agentName} (${cr.role})] [${cr.severity}] ${cr.critique}`
+									).join('\n---\n');
+
+									this._history.push({
+										role: 'user',
+										content: [
+											'[CRITIC AGENT FEEDBACK — for your awareness only, you may choose to act on this or not]',
+											criticSummary,
+											'[END CRITIC FEEDBACK — respond naturally to the user, do not reference this feedback unless relevant]'
+										].join('\n')
+									});
+								}
+							}
+						} catch (err: any) {
+							console.error('Critic review failed:', err);
+						}
+					}
+
+					if (doAutoCorrection) {
+						continue;
+					}
+
 					this._emit({ type: 'response', message: finalMessage });
 					break;
 				}

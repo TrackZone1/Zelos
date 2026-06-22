@@ -3,6 +3,7 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Agent, AgentEvent } from './Agent';
+import { CriticSubAgent } from './CriticAgent';
 
 export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = 'zelos.chatView';
@@ -25,7 +26,11 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		this._agent = new Agent(
 			(event: AgentEvent) => {
 				if (!this._view) return;
-				this._view.webview.postMessage({ type: event.type, value: event.message });
+				if (event.type === 'critic_review' && event.criticResults) {
+					this._view.webview.postMessage({ type: 'critic_review', results: event.criticResults });
+				} else {
+					this._view.webview.postMessage({ type: event.type, value: event.message });
+				}
 			},
 			async (command: string) => {
 				if (!this._view) return false;
@@ -231,6 +236,11 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 				}
 				case 'stopChat': {
 					this._agent.stop();
+					break;
+				}
+				case 'updateCriticAgents': {
+					const agents = data.agents as CriticSubAgent[];
+					this._agent.setCriticSubAgents(agents);
 					break;
 				}
 			}
@@ -884,6 +894,216 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		}
 		#run-audit-button:hover { background: var(--accent-hover); }
 
+		/* ── Critic Sub-Agents Panel ─────────── */
+		#critic-agents-panel {
+			display: none;
+			flex-direction: column;
+			gap: 10px;
+			padding: 12px;
+			background: var(--card-bg);
+			border: 1px solid var(--border-color);
+			margin-bottom: 8px;
+			border-radius: 6px;
+			box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+			animation: slideDown 0.25s ease-out;
+		}
+		.critic-panel-header h3 {
+			font-size: 13px;
+			font-weight: 600;
+			margin-bottom: 4px;
+			color: var(--accent);
+		}
+		.critic-panel-header p {
+			font-size: 11px;
+			color: var(--vscode-descriptionForeground);
+			margin-bottom: 4px;
+			line-height: 1.35;
+		}
+		.critic-agent-card {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			padding: 8px 10px;
+			background: var(--vscode-textBlockQuote-background);
+			border: 1px solid var(--border-color);
+			border-radius: 6px;
+			font-size: 12px;
+			transition: all 0.2s ease;
+		}
+		.critic-agent-card:hover {
+			border-color: var(--vscode-focusBorder);
+		}
+		.critic-agent-icon {
+			font-size: 16px;
+			flex-shrink: 0;
+		}
+		.critic-agent-info {
+			flex: 1;
+			min-width: 0;
+		}
+		.critic-agent-name {
+			font-weight: 600;
+			font-size: 12px;
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
+		}
+		.critic-agent-meta {
+			font-size: 10px;
+			color: var(--vscode-descriptionForeground);
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
+		}
+		.critic-agent-toggle {
+			flex-shrink: 0;
+		}
+		.critic-agent-delete {
+			background: none;
+			border: none;
+			color: var(--vscode-errorForeground, #ff6b6b);
+			cursor: pointer;
+			padding: 2px 4px;
+			font-size: 14px;
+			border-radius: 3px;
+			transition: all 0.2s ease;
+			flex-shrink: 0;
+		}
+		.critic-agent-delete:hover {
+			background: rgba(229, 57, 53, 0.15);
+		}
+		.critic-add-form {
+			display: flex;
+			flex-direction: column;
+			gap: 6px;
+			padding-top: 6px;
+			border-top: 1px solid var(--border-color);
+		}
+		.critic-add-form .form-row {
+			display: flex;
+			gap: 6px;
+		}
+		.critic-add-form input, .critic-add-form select {
+			background: var(--vscode-input-background);
+			color: var(--vscode-input-foreground);
+			border: 1px solid var(--vscode-input-border, var(--border-color));
+			padding: 5px 8px;
+			border-radius: 4px;
+			font-family: var(--font-sans);
+			font-size: 11px;
+			outline: none;
+			flex: 1;
+		}
+		.critic-add-form input:focus, .critic-add-form select:focus {
+			border-color: var(--vscode-focusBorder);
+		}
+		#add-critic-btn {
+			background: var(--accent);
+			color: #ffffff;
+			border: none;
+			padding: 5px 12px;
+			cursor: pointer;
+			border-radius: 4px;
+			font-size: 11px;
+			font-weight: 600;
+			font-family: var(--font-sans);
+			transition: background 0.2s;
+			white-space: nowrap;
+		}
+		#add-critic-btn:hover { background: var(--accent-hover); }
+		.critic-agents-list {
+			display: flex;
+			flex-direction: column;
+			gap: 6px;
+		}
+		.critic-agents-empty {
+			font-size: 11px;
+			color: var(--vscode-descriptionForeground);
+			text-align: center;
+			padding: 8px;
+			opacity: 0.7;
+		}
+		.critic-count-badge {
+			background: var(--accent);
+			color: #ffffff;
+			font-size: 9px;
+			font-weight: 700;
+			min-width: 14px;
+			height: 14px;
+			border-radius: 7px;
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			padding: 0 3px;
+		}
+
+		/* ── Critic Review Messages in Chat ──── */
+		.msg-critic-review {
+			align-self: stretch;
+			max-width: 100%;
+			padding: 0;
+			background: none;
+			display: flex;
+			flex-direction: column;
+			gap: 6px;
+		}
+		.critic-review-card {
+			padding: 8px 12px;
+			border-radius: 6px;
+			font-size: 12px;
+			line-height: 1.45;
+			border-left: 3px solid;
+			animation: fadeIn 0.3s ease-out;
+		}
+		.critic-review-card.severity-info {
+			background: hsla(210, 60%, 50%, 0.08);
+			border-left-color: hsl(210, 60%, 55%);
+			color: var(--fg);
+		}
+		.critic-review-card.severity-warning {
+			background: hsla(40, 80%, 50%, 0.08);
+			border-left-color: hsl(40, 85%, 50%);
+			color: var(--fg);
+		}
+		.critic-review-card.severity-critical {
+			background: hsla(0, 70%, 50%, 0.08);
+			border-left-color: hsl(0, 70%, 55%);
+			color: var(--fg);
+		}
+		.critic-review-header {
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			margin-bottom: 4px;
+			font-weight: 600;
+			font-size: 11px;
+		}
+		.critic-review-severity {
+			font-size: 9px;
+			font-weight: 700;
+			text-transform: uppercase;
+			padding: 1px 5px;
+			border-radius: 3px;
+			letter-spacing: 0.5px;
+		}
+		.severity-info .critic-review-severity {
+			background: hsla(210, 60%, 55%, 0.2);
+			color: hsl(210, 60%, 55%);
+		}
+		.severity-warning .critic-review-severity {
+			background: hsla(40, 85%, 50%, 0.2);
+			color: hsl(40, 85%, 45%);
+		}
+		.severity-critical .critic-review-severity {
+			background: hsla(0, 70%, 55%, 0.2);
+			color: hsl(0, 70%, 55%);
+		}
+		.critic-review-body {
+			font-size: 12px;
+			line-height: 1.5;
+			white-space: pre-wrap;
+		}
+
 		#attach-image-btn {
 			background: none;
 			color: var(--vscode-foreground);
@@ -909,6 +1129,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			<span id="credit-value">--</span>
 			<span id="credit-label" style="font-size: 10px; opacity: 0.8; font-weight: 400;">credits</span>
 		</div>
+		<button class="top-btn" id="critic-toggle" title="Critic Sub-Agents"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg> Critics <span id="critic-count-badge" class="critic-count-badge" style="display: none;">0</span></button>
 		<button class="top-btn" id="reset-btn" title="New conversation"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg> Reset</button>
 		<button class="top-btn" id="settings-toggle" title="Settings"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg> Settings</button>
 		<button class="top-btn" id="audit-toggle" title="Review & Test Workspace"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg> Audit</button>
@@ -1072,6 +1293,60 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		<button id="run-audit-button">Start Audit</button>
 	</div>
 
+	<div id="critic-agents-panel">
+		<div class="critic-panel-header">
+			<h3>🎭 Critic Sub-Agents</h3>
+			<p>Add AI reviewers that critique Zelos responses. Each critic can have a specialized role and its own model.</p>
+		</div>
+		<div class="critic-agents-list" id="critic-agents-list">
+			<div class="critic-agents-empty">No critic agents configured yet.</div>
+		</div>
+		<div class="critic-add-form">
+			<div class="form-row">
+				<input type="text" id="critic-name-input" placeholder="Agent name" />
+				<select id="critic-role-input">
+					<option value="architect">🏗️ Architect</option>
+					<option value="security">🔒 Security</option>
+					<option value="performance">⚡ Performance</option>
+					<option value="ux">🎨 UX/Design</option>
+					<option value="testing">🧪 Testing</option>
+					<option value="code-quality">📏 Code Quality</option>
+					<option value="devops">🌐 DevOps</option>
+					<option value="custom">💬 Custom</option>
+				</select>
+			</div>
+			<div class="form-row">
+				<select id="critic-model-input">
+					<option value="gpt-5-5">gpt-5-5</option>
+					<option value="gpt-5-4">gpt-5-4</option>
+					<option value="gpt-5-2">gpt-5-2</option>
+					<option value="gpt-5-codex">gpt-5-codex</option>
+					<option value="gpt-5.1-codex">gpt-5.1-codex</option>
+					<option value="gpt-5.2-codex">gpt-5.2-codex</option>
+					<option value="gpt-5.3-codex">gpt-5.3-codex</option>
+					<option value="gpt-5.4-codex">gpt-5.4-codex</option>
+					<option value="claude-opus-4-7">Claude Opus 4.7</option>
+					<option value="claude-opus-4-8">Claude Opus 4.8</option>
+					<option value="cluade-fable-5">Claude Fable 5</option>
+					<option value="claude-haiku-4-5">Claude Haiku 4.5</option>
+					<option value="claude-opus-4-5">Claude Opus 4.5</option>
+					<option value="claude-opus-4-6">Claude Opus 4.6</option>
+					<option value="claude-sonnet-4-5">Claude Sonnet 4.5</option>
+					<option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+					<option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+					<option value="gemini-3-flash-v1beta">Gemini 3 Flash (v1beta)</option>
+					<option value="gemini-2.5-pro-openai">Gemini 2.5 Pro (openai)</option>
+					<option value="gemini-3-pro-openai">Gemini 3 Pro (openai)</option>
+					<option value="gemini-3.1-pro-openai">Gemini 3.1 Pro (openai)</option>
+					<option value="gemini-2.5-flash-openai">Gemini 2.5 Flash (openai)</option>
+					<option value="gemini-3-flash-openai">Gemini 3 Flash (openai)</option>
+					<option value="gemini-3.5-flash-openai">Gemini 3.5 Flash (openai)</option>
+				</select>
+				<button id="add-critic-btn">+ Add</button>
+			</div>
+		</div>
+	</div>
+
 	<div id="chat-history"></div>
 
 	<!-- Image Preview Panel -->
@@ -1176,6 +1451,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 				settingsPanel.style.display = 'flex';
 				auditPanel.style.display = 'none';
 				browserPanel.style.display = 'none';
+				criticPanel.style.display = 'none';
 				apiKeyInput.focus();
 			} else {
 				creditValue.textContent = '--';
@@ -1195,7 +1471,138 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		const auditCorrectCheckbox = document.getElementById('audit-correct');
 		const runAuditBtn = document.getElementById('run-audit-button');
 
+		// ── Critic Sub-Agents ────────────────
+		const criticToggle = document.getElementById('critic-toggle');
+		const criticPanel = document.getElementById('critic-agents-panel');
+		const criticAgentsList = document.getElementById('critic-agents-list');
+		const criticNameInput = document.getElementById('critic-name-input');
+		const criticRoleInput = document.getElementById('critic-role-input');
+		const criticModelInput = document.getElementById('critic-model-input');
+		const addCriticBtn = document.getElementById('add-critic-btn');
+		const criticCountBadge = document.getElementById('critic-count-badge');
+
+		let criticAgents = [];
+
+		const ROLE_ICONS = {
+			'architect': '\u{1F3D7}\u{FE0F}',
+			'security': '\u{1F512}',
+			'performance': '\u26A1',
+			'ux': '\u{1F3A8}',
+			'testing': '\u{1F9EA}',
+			'code-quality': '\u{1F4CF}',
+			'devops': '\u{1F310}',
+			'custom': '\u{1F4AC}'
+		};
+
+		function updateCriticCountBadge() {
+			const count = criticAgents.filter(a => a.enabled).length;
+			if (count > 0) {
+				criticCountBadge.textContent = count;
+				criticCountBadge.style.display = 'inline-flex';
+			} else {
+				criticCountBadge.style.display = 'none';
+			}
+		}
+
+		function renderCriticAgentsList() {
+			if (criticAgents.length === 0) {
+				criticAgentsList.innerHTML = '<div class="critic-agents-empty">No critic agents configured yet.</div>';
+			} else {
+				criticAgentsList.innerHTML = '';
+				criticAgents.forEach((agent, index) => {
+					const card = document.createElement('div');
+					card.className = 'critic-agent-card';
+					const icon = ROLE_ICONS[agent.role] || ROLE_ICONS['custom'];
+					const toggleId = 'critic-toggle-' + index;
+					card.innerHTML =
+						'<span class="critic-agent-icon">' + icon + '</span>' +
+						'<div class="critic-agent-info">' +
+							'<div class="critic-agent-name">' + escapeHtml(agent.name) + '</div>' +
+							'<div class="critic-agent-meta">' + escapeHtml(agent.role) + ' \u2022 ' + escapeHtml(agent.model) + '</div>' +
+						'</div>' +
+						'<div class="critic-agent-toggle">' +
+							'<input type="checkbox" id="' + toggleId + '" class="toggle-checkbox critic-enable-toggle" data-index="' + index + '" ' + (agent.enabled ? 'checked' : '') + ' />' +
+							'<label for="' + toggleId + '" class="toggle-label" title="Enable/Disable"><span class="toggle-switch"></span></label>' +
+						'</div>' +
+						'<button class="critic-agent-delete" data-index="' + index + '" title="Remove">\u00D7</button>';
+					criticAgentsList.appendChild(card);
+				});
+			}
+			updateCriticCountBadge();
+		}
+
+		function saveCriticAgents() {
+			try {
+				localStorage.setItem('zelos-critic-agents', JSON.stringify(criticAgents));
+			} catch (e) {
+				console.error('Failed to save critic agents to localStorage:', e);
+			}
+			vscode.postMessage({ type: 'updateCriticAgents', agents: criticAgents });
+			renderCriticAgentsList();
+		}
+
+		criticToggle.addEventListener('click', () => {
+			criticPanel.style.display = criticPanel.style.display === 'flex' ? 'none' : 'flex';
+			if (criticPanel.style.display === 'flex') {
+				settingsPanel.style.display = 'none';
+				auditPanel.style.display = 'none';
+				browserPanel.style.display = 'none';
+			}
+		});
+
+		addCriticBtn.addEventListener('click', () => {
+			const name = criticNameInput.value.trim();
+			if (!name) {
+				criticNameInput.focus();
+				return;
+			}
+			criticAgents.push({
+				id: 'critic-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
+				name: name,
+				role: criticRoleInput.value,
+				model: criticModelInput.value,
+				enabled: true
+			});
+			criticNameInput.value = '';
+			saveCriticAgents();
+		});
+
+		criticNameInput.addEventListener('keypress', (e) => {
+			if (e.key === 'Enter') addCriticBtn.click();
+		});
+
+		criticAgentsList.addEventListener('click', (e) => {
+			const deleteBtn = e.target.closest('.critic-agent-delete');
+			if (deleteBtn) {
+				const idx = parseInt(deleteBtn.dataset.index, 10);
+				criticAgents.splice(idx, 1);
+				saveCriticAgents();
+			}
+		});
+
+		criticAgentsList.addEventListener('change', (e) => {
+			if (e.target.classList.contains('critic-enable-toggle')) {
+				const idx = parseInt(e.target.dataset.index, 10);
+				criticAgents[idx].enabled = e.target.checked;
+				saveCriticAgents();
+			}
+		});
+
 		let statusEl = null;
+
+		// Load critic agents from localStorage on startup
+		try {
+			const saved = localStorage.getItem('zelos-critic-agents');
+			if (saved) {
+				criticAgents = JSON.parse(saved);
+			}
+		} catch (e) {
+			console.error('Failed to load critic agents from localStorage:', e);
+		}
+		renderCriticAgentsList();
+		if (criticAgents.length > 0) {
+			vscode.postMessage({ type: 'updateCriticAgents', agents: criticAgents });
+		}
 
 		vscode.postMessage({ type: 'webviewLoaded' });
 
@@ -1410,6 +1817,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			if (settingsPanel.style.display === 'flex') {
 				auditPanel.style.display = 'none';
 				browserPanel.style.display = 'none';
+				criticPanel.style.display = 'none';
 			}
 		});
 
@@ -1418,6 +1826,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			if (auditPanel.style.display === 'flex') {
 				settingsPanel.style.display = 'none';
 				browserPanel.style.display = 'none';
+				criticPanel.style.display = 'none';
 			}
 		});
 
@@ -1426,6 +1835,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			if (browserPanel.style.display === 'flex') {
 				settingsPanel.style.display = 'none';
 				auditPanel.style.display = 'none';
+				criticPanel.style.display = 'none';
 				vscode.postMessage({ type: 'checkBrowser' });
 			}
 		});
@@ -1703,6 +2113,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 					autoApproveCheckbox.checked = (msg.fileApprovalMode === 'acceptAll');
 					communicationLanguageInput.value = msg.communicationLanguage || 'English';
 					codeLanguageInput.value = msg.codeLanguage || 'English';
+
 					break;
 
 				case 'chromeProfiles':
@@ -1809,6 +2220,30 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 						'</div>';
 					history.appendChild(div);
 					history.scrollTop = history.scrollHeight;
+					break;
+				}
+
+				case 'critic_review': {
+					clearStatus();
+					if (msg.results && msg.results.length > 0) {
+						const container = document.createElement('div');
+						container.className = 'msg msg-critic-review';
+						msg.results.forEach(cr => {
+							const icon = ROLE_ICONS[cr.role] || ROLE_ICONS['custom'];
+							const card = document.createElement('div');
+							card.className = 'critic-review-card severity-' + cr.severity;
+							card.innerHTML =
+								'<div class="critic-review-header">' +
+									'<span>' + icon + '</span> ' +
+									'<span>' + escapeHtml(cr.agentName) + '</span>' +
+									'<span class="critic-review-severity">' + cr.severity + '</span>' +
+								'</div>' +
+								'<div class="critic-review-body">' + escapeHtml(cr.critique) + '</div>';
+							container.appendChild(card);
+						});
+						history.appendChild(container);
+						history.scrollTop = history.scrollHeight;
+					}
 					break;
 				}
 			}
