@@ -43,6 +43,29 @@
 			padding-bottom: 8px;
 			border-bottom: 1px solid var(--border-color);
 		}
+		#credit-badge {
+			margin-right: auto;
+			display: none;
+			align-items: center;
+			gap: 6px;
+			font-size: 12px;
+			font-weight: 600;
+			padding: 4px 10px;
+			border-radius: 20px;
+			background: linear-gradient(135deg, hsla(var(--accent-hue), 75%, 45%, 0.15), hsla(var(--accent-hue), 75%, 45%, 0.05));
+			border: 1px solid var(--accent-glow);
+			color: var(--accent);
+			cursor: pointer;
+			transition: all 0.2s ease;
+		}
+		#credit-badge:hover {
+			background: linear-gradient(135deg, hsla(var(--accent-hue), 75%, 45%, 0.25), hsla(var(--accent-hue), 75%, 45%, 0.1));
+			transform: translateY(-1px);
+			box-shadow: 0 2px 8px var(--accent-glow);
+		}
+		#credit-badge:active {
+			transform: translateY(0);
+		}
 		.top-btn {
 			background: none;
 			color: #cccccc;
@@ -55,7 +78,7 @@
 			font-weight: 500;
 			display: flex;
 			align-items: center;
-			gap: 4px;
+			gap: 6px;
 			transition: all 0.2s ease;
 		}
 		.top-btn:hover {
@@ -230,6 +253,35 @@
 			font-size: 13px;
 			outline: none;
 		}
+		#model-input {
+			background: #3c3c3c;
+			color: #cccccc;
+			border: 1px solid var(--border-color);
+			padding: 8px 6px;
+			border-radius: 4px;
+			font-family: var(--font-sans);
+			font-size: 12px;
+			outline: none;
+			cursor: pointer;
+			max-width: 140px;
+		}
+		#model-input:focus {
+			border-color: #007acc;
+		}
+		#custom-model-input {
+			background: #3c3c3c;
+			color: #cccccc;
+			border: 1px solid var(--border-color);
+			padding: 8px 10px;
+			border-radius: 4px;
+			font-family: var(--font-sans);
+			font-size: 12px;
+			outline: none;
+			max-width: 120px;
+		}
+		#custom-model-input:focus {
+			border-color: #007acc;
+		}
 		#send-button {
 			background: #0e639c;
 			color: #ffffff;
@@ -246,9 +298,14 @@
 </head>
 <body>
 	<div id="top-bar">
-		<button class="top-btn" id="reset-btn" title="New conversation">🗑️ Reset</button>
-		<button class="top-btn" id="settings-toggle" title="Settings">⚙️ Settings</button>
-		<button class="top-btn" id="audit-toggle" title="Review & Test Workspace">🔍 Audit</button>
+		<div id="credit-badge" title="Click to refresh balance">
+			<span class="credit-icon" style="display: inline-block; vertical-align: middle;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v12M15 9H11.5a2.5 2.5 0 0 0 0 5h3a2.5 2.5 0 0 1 0 5H9"></path></svg></span>
+			<span id="credit-value">--</span>
+			<span style="font-size: 10px; opacity: 0.8; font-weight: 400;">credits</span>
+		</div>
+		<button class="top-btn" id="reset-btn" title="New conversation"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg> Reset</button>
+		<button class="top-btn" id="settings-toggle" title="Settings"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg> Settings</button>
+		<button class="top-btn" id="audit-toggle" title="Review & Test Workspace"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg> Audit</button>
 	</div>
 
 	<div id="settings-panel">
@@ -261,29 +318,19 @@
 			<input type="text" id="api-url-input" placeholder="https://api.kie.ai" />
 		</div>
 		<div class="setting-row">
-			<label for="model-input">Model</label>
-			<select id="model-input">
-				<option value="gpt-5-5">gpt-5-5 (GPT 5.5)</option>
-				<option value="gpt-5-codex">gpt-5-codex</option>
-				<option value="gpt-5.1-codex">gpt-5.1-codex</option>
-				<option value="custom">Autre (Saisir ci-dessous...)</option>
-			</select>
-			<input type="text" id="custom-model-input" placeholder="nom-du-modele" style="margin-top: 4px; display: none;" />
-		</div>
-		<div class="setting-row">
-			<label for="command-approval-input">Autorisation des Commandes</label>
+			<label for="command-approval-input">Command Approval Mode</label>
 			<select id="command-approval-input">
-				<option value="prompt">Demander à chaque fois (Prompt)</option>
-				<option value="acceptAll">Tout autoriser automatiquement</option>
-				<option value="rejectAll">Tout refuser automatiquement</option>
+				<option value="prompt">Always Prompt</option>
+				<option value="acceptAll">Allow All Automatically</option>
+				<option value="rejectAll">Reject All Automatically</option>
 			</select>
 		</div>
 		<div class="setting-row">
-			<label for="file-approval-input">Autorisation du Code (Fichiers)</label>
+			<label for="file-approval-input">File Write Approval Mode</label>
 			<select id="file-approval-input">
-				<option value="prompt">Demander à chaque fois (Prompt)</option>
-				<option value="acceptAll">Tout autoriser automatiquement</option>
-				<option value="rejectAll">Tout refuser automatiquement</option>
+				<option value="prompt">Always Prompt</option>
+				<option value="acceptAll">Allow All Automatically</option>
+				<option value="rejectAll">Reject All Automatically</option>
 			</select>
 		</div>
 		<button id="save-settings-button">Save Settings</button>
@@ -291,7 +338,7 @@
 
 	<div id="audit-panel">
 		<div class="audit-header">
-			<h3>🔍 Workspace Audit & Self-Correction</h3>
+			<h3>Workspace Audit & Self-Correction</h3>
 			<p>Ask Zelos to run tests, critique code quality, and apply fixes automatically.</p>
 		</div>
 		<div class="setting-row">
@@ -336,6 +383,13 @@
 
 	<div id="input-container">
 		<input type="text" id="message-input" placeholder="Ask Zelos..." />
+		<select id="model-input" title="Choose AI Model">
+			<option value="gpt-5-5">gpt-5-5</option>
+			<option value="gpt-5-codex">gpt-5-codex</option>
+			<option value="gpt-5.1-codex">gpt-5.1-codex</option>
+			<option value="custom">Other...</option>
+		</select>
+		<input type="text" id="custom-model-input" placeholder="model-name" style="display: none;" title="Enter custom model" />
 		<button id="send-button">Send</button>
 	</div>
 
@@ -357,6 +411,25 @@
 		const saveBtn = document.getElementById('save-settings-button');
 		const resetBtn = document.getElementById('reset-btn');
 		const auditToggle = document.getElementById('audit-toggle');
+		const creditBadge = document.getElementById('credit-badge');
+		const creditValue = document.getElementById('credit-value');
+
+		let currentCredits = 120;
+
+		function updateMockCredits() {
+			creditValue.textContent = currentCredits;
+			creditBadge.style.display = 'flex';
+		}
+
+		creditBadge.addEventListener('click', () => {
+			creditValue.textContent = '--';
+			setTimeout(() => {
+				updateMockCredits();
+			}, 300);
+		});
+
+		// Initialize mock credits
+		updateMockCredits();
 		const auditPanel = document.getElementById('audit-panel');
 		const auditArchCheckbox = document.getElementById('audit-arch');
 		const auditCodeCheckbox = document.getElementById('audit-code');
@@ -512,28 +585,28 @@
 		function approveCommand(btn) {
 			const parent = btn.closest('.msg-approval');
 			parent.classList.add('approved');
-			parent.querySelector('.approval-actions').innerHTML = '<span class="status-approved">✅ Autorisée (En cours...)</span>';
+			parent.querySelector('.approval-actions').innerHTML = '<span class="status-approved">Approved (Executing...)</span>';
 			vscode.postMessage({ type: 'approveCommand' });
 		}
 
 		function rejectCommand(btn) {
 			const parent = btn.closest('.msg-approval');
 			parent.classList.add('rejected');
-			parent.querySelector('.approval-actions').innerHTML = '<span class="status-rejected">❌ Refusée</span>';
+			parent.querySelector('.approval-actions').innerHTML = '<span class="status-rejected">Rejected</span>';
 			vscode.postMessage({ type: 'rejectCommand' });
 		}
 
 		function approveFile(btn) {
 			const parent = btn.closest('.msg-approval');
 			parent.classList.add('approved');
-			parent.querySelector('.approval-actions').innerHTML = '<span class="status-approved">✅ Validée (Écriture...)</span>';
+			parent.querySelector('.approval-actions').innerHTML = '<span class="status-approved">Approved (Writing...)</span>';
 			vscode.postMessage({ type: 'approveFile' });
 		}
 
 		function rejectFile(btn) {
 			const parent = btn.closest('.msg-approval');
 			parent.classList.add('rejected');
-			parent.querySelector('.approval-actions').innerHTML = '<span class="status-rejected">❌ Refusée</span>';
+			parent.querySelector('.approval-actions').innerHTML = '<span class="status-rejected">Rejected</span>';
 			vscode.postMessage({ type: 'rejectFile' });
 		}
 
@@ -594,21 +667,43 @@
 			auditPanel.style.display = 'none';
 		});
 
-		modelSelect.addEventListener('change', () => {
-			customModelInput.style.display = modelSelect.value === 'custom' ? 'block' : 'none';
-		});
-
-		saveBtn.addEventListener('click', () => {
+		function saveSelectedModel() {
 			let selectedModel = modelSelect.value;
 			if (selectedModel === 'custom') {
 				selectedModel = customModelInput.value.trim() || 'gpt-5-5';
 			}
+			vscode.postMessage({
+				type: 'updateModel',
+				value: selectedModel
+			});
+		}
 
+		modelSelect.addEventListener('change', () => {
+			if (modelSelect.value === 'custom') {
+				customModelInput.style.display = 'block';
+				customModelInput.focus();
+			} else {
+				customModelInput.style.display = 'none';
+				saveSelectedModel();
+			}
+		});
+
+		customModelInput.addEventListener('blur', () => {
+			saveSelectedModel();
+		});
+
+		customModelInput.addEventListener('keypress', (e) => {
+			if (e.key === 'Enter') {
+				saveSelectedModel();
+				customModelInput.blur();
+			}
+		});
+
+		saveBtn.addEventListener('click', () => {
 			vscode.postMessage({
 				type: 'saveSettings',
 				apiKey: apiKeyInput.value.trim(),
 				apiUrl: apiUrlInput.value.trim(),
-				model: selectedModel,
 				commandApprovalMode: commandApprovalInput.value,
 				fileApprovalMode: fileApprovalInput.value
 			});
@@ -619,6 +714,8 @@
 			history.innerHTML = '';
 			statusEl = null;
 			vscode.postMessage({ type: 'resetChat' });
+			currentCredits = 120;
+			updateMockCredits();
 		});
 
 		sendBtn.addEventListener('click', () => {
@@ -626,6 +723,8 @@
 			if (text) {
 				vscode.postMessage({ type: 'chat', value: text });
 				input.value = '';
+				currentCredits = Math.max(0, currentCredits - 5);
+				updateMockCredits();
 			}
 		});
 
@@ -637,6 +736,15 @@
 		window.addEventListener('message', event => {
 			const msg = event.data;
 			switch (msg.type) {
+				case 'creditUpdate':
+					if (msg.value !== null && msg.value !== undefined) {
+						currentCredits = msg.value;
+						updateMockCredits();
+					} else {
+						creditBadge.style.display = 'none';
+					}
+					break;
+
 				case 'initSettings':
 					apiKeyInput.value = msg.apiKey;
 					apiUrlInput.value = msg.apiUrl;

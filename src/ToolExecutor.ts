@@ -139,7 +139,7 @@ export class ToolExecutor {
 			if (!approved) {
 				return {
 					rawMatch,
-					uiSnippet: `\n> ❌ **File creation/modification rejected by user:** \`${filePath}\`\n`,
+					uiSnippet: `\n> **[Rejected] File creation/modification by user:** \`${filePath}\`\n`,
 					result: { action: `create_file ${filePath}`, status: 'error', details: 'File creation was rejected by the user.' },
 				};
 			}
@@ -154,13 +154,13 @@ export class ToolExecutor {
 			await vscode.workspace.fs.writeFile(fileUri, Buffer.from(content, 'utf8'));
 			return {
 				rawMatch,
-				uiSnippet: `\n> ✅ **File created:** \`${filePath}\`\n`,
+				uiSnippet: `\n> **[Created] File:** \`${filePath}\`\n`,
 				result: { action: `create_file ${filePath}`, status: 'success', details: 'File written successfully.' },
 			};
 		} catch (err: any) {
 			return {
 				rawMatch,
-				uiSnippet: `\n> ❌ **Failed to create file:** \`${filePath}\` — ${err.message}\n`,
+				uiSnippet: `\n> **[Error] Failed to create file:** \`${filePath}\` — ${err.message}\n`,
 				result: { action: `create_file ${filePath}`, status: 'error', details: err.message },
 			};
 		}
@@ -193,7 +193,7 @@ export class ToolExecutor {
 		if (this._isBlockedCommand(command)) {
 			return {
 				rawMatch,
-				uiSnippet: `\n> 🛑 **Blocked dangerous command:** \`${command}\`\n`,
+				uiSnippet: `\n> **[Blocked] dangerous command:** \`${command}\`\n`,
 				result: { action: `run_command ${command}`, status: 'error', details: 'Command blocked for safety.' },
 			};
 		}
@@ -204,7 +204,7 @@ export class ToolExecutor {
 			if (!approved) {
 				return {
 					rawMatch,
-					uiSnippet: `\n> ❌ **Command execution rejected by user:** \`${command}\`\n`,
+					uiSnippet: `\n> **[Rejected] Command execution by user:** \`${command}\`\n`,
 					result: { action: `run_command ${command}`, status: 'error', details: 'Command execution was rejected by the user.' },
 				};
 			}
@@ -226,7 +226,7 @@ export class ToolExecutor {
 
 			return {
 				rawMatch,
-				uiSnippet: `\n> 💻 **Ran:** \`${command}\`\n`,
+				uiSnippet: `\n> **[Ran] Command:** \`${command}\`\n`,
 				result: { action: `run_command ${command}`, status: 'success', details: output || '(no output)' },
 			};
 		} catch (err: any) {
@@ -234,7 +234,7 @@ export class ToolExecutor {
 			const truncatedDetails = errDetails.length > 800 ? errDetails.substring(0, 800) + '\n...[output truncated]' : errDetails;
 			return {
 				rawMatch,
-				uiSnippet: `\n> ❌ **Command failed:** \`${command}\`\n\`\`\`\n${truncatedDetails}\n\`\`\`\n`,
+				uiSnippet: `\n> **[Failed] Command:** \`${command}\`\n\`\`\`\n${truncatedDetails}\n\`\`\`\n`,
 				result: { action: `run_command ${command}`, status: 'error', details: errDetails },
 			};
 		}
@@ -273,13 +273,13 @@ export class ToolExecutor {
 
 			return {
 				rawMatch,
-				uiSnippet: `\n> 📖 **Read file:** \`${filePath}\`\n`,
+				uiSnippet: `\n> **[Read] File:** \`${filePath}\`\n`,
 				result: { action: `read_file ${filePath}`, status: 'success', details: content },
 			};
 		} catch (err: any) {
 			return {
 				rawMatch,
-				uiSnippet: `\n> ❌ **Cannot read file:** \`${filePath}\` — ${err.message}\n`,
+				uiSnippet: `\n> **[Error] Cannot read file:** \`${filePath}\` — ${err.message}\n`,
 				result: { action: `read_file ${filePath}`, status: 'error', details: err.message },
 			};
 		}
@@ -318,13 +318,13 @@ export class ToolExecutor {
 
 			return {
 				rawMatch,
-				uiSnippet: `\n> 📂 **Listed:** \`${dirPath}/\`\n`,
+				uiSnippet: `\n> **[Listed] Directory:** \`${dirPath}/\`\n`,
 				result: { action: `list_files ${dirPath}`, status: 'success', details: listing || '(empty directory)' },
 			};
 		} catch (err: any) {
 			return {
 				rawMatch,
-				uiSnippet: `\n> ❌ **Cannot list:** \`${dirPath}/\` — ${err.message}\n`,
+				uiSnippet: `\n> **[Error] Cannot list directory:** \`${dirPath}/\` — ${err.message}\n`,
 				result: { action: `list_files ${dirPath}`, status: 'error', details: err.message },
 			};
 		}

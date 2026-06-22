@@ -79,6 +79,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 						commandApprovalMode: config.get<string>('commandApprovalMode') || 'prompt',
 						fileApprovalMode: config.get<string>('fileApprovalMode') || 'prompt',
 					});
+					this._updateCredits();
 					break;
 				}
 				case 'chat': {
@@ -129,11 +130,18 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 					const config = vscode.workspace.getConfiguration('zelos');
 					Promise.all([
 						config.update('api.key', data.apiKey, true),
-						config.update('api.model', data.model, true),
 						config.update('api.url', data.apiUrl, true),
 						config.update('commandApprovalMode', data.commandApprovalMode, true),
 						config.update('fileApprovalMode', data.fileApprovalMode, true),
-					]).then(() => vscode.window.showInformationMessage('Zelos settings saved!'));
+					]).then(() => {
+						vscode.window.showInformationMessage('Zelos settings saved!');
+						this._updateCredits();
+					});
+					break;
+				}
+				case 'updateModel': {
+					const config = vscode.workspace.getConfiguration('zelos');
+					config.update('api.model', data.value, true);
 					break;
 				}
 				case 'updateFileApprovalMode': {
@@ -145,6 +153,10 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 					this._handleAuditMessage(data.options);
 					break;
 				}
+				case 'refreshCredits': {
+					this._updateCredits();
+					break;
+				}
 			}
 		});
 	}
@@ -153,6 +165,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		if (!this._view) return;
 		this._view.webview.postMessage({ type: 'userMessage', value: message });
 		await this._agent.handleUserMessage(message);
+		this._updateCredits();
 	}
 
 	private async _handleAuditMessage(options: {
@@ -165,8 +178,60 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		cognitiveComplexityThreshold?: number;
 	}) {
 		if (!this._view) return;
-		this._view.webview.postMessage({ type: 'userMessage', value: '🔍 Starting Workspace Audit...' });
+		this._view.webview.postMessage({ type: 'userMessage', value: 'Starting Workspace Audit...' });
 		await this._agent.runAudit(options);
+		this._updateCredits();
+	}
+
+	private async _updateCredits() {
+		const config = vscode.workspace.getConfiguration('zelos');
+		const apiUrl = config.get<string>('api.url') || 'https://api.kie.ai';
+		const apiKey = config.get<string>('api.key') || '';
+
+		if (!apiKey) {
+			this._view?.webview.postMessage({ type: 'creditUpdate', value: null });
+			return;
+		}
+
+		try {
+			const cleanUrl = apiUrl.replace(/\/+$/, '');
+			let creditUrl: string;
+			if (cleanUrl.includes('api.kie.ai')) {
+				creditUrl = 'https://api.kie.ai/api/v1/chat/credit';
+			} else {
+				if (cleanUrl.endsWith('/codex/v1/responses')) {
+					creditUrl = cleanUrl.replace('/codex/v1/responses', '/api/v1/chat/credit');
+				} else if (cleanUrl.endsWith('/api/v1/responses')) {
+					creditUrl = cleanUrl.replace('/api/v1/responses', '/api/v1/chat/credit');
+				} else {
+					creditUrl = cleanUrl + '/api/v1/chat/credit';
+				}
+			}
+
+			const response = await fetch(creditUrl, {
+				method: 'GET',
+				headers: {
+					'Authorization': `Bearer ${apiKey}`,
+					'Content-Type': 'application/json'
+				}
+			});
+
+			if (response.ok) {
+				const data = (await response.json()) as any;
+				if (data && data.code === 200) {
+					const credits = data.data;
+					this._view?.webview.postMessage({ type: 'creditUpdate', value: credits });
+				} else {
+					console.error('Failed to get credit balance:', data?.msg || 'unknown error');
+					this._view?.webview.postMessage({ type: 'creditUpdate', value: null });
+				}
+			} else {
+				this._view?.webview.postMessage({ type: 'creditUpdate', value: null });
+			}
+		} catch (err) {
+			console.error('Error fetching credits:', err);
+			this._view?.webview.postMessage({ type: 'creditUpdate', value: null });
+		}
 	}
 
 	private _getHtmlForWebview(webview: vscode.Webview): string {
@@ -234,6 +299,29 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			padding-bottom: 8px;
 			border-bottom: 1px solid var(--border-color);
 		}
+		#credit-badge {
+			margin-right: auto;
+			display: none;
+			align-items: center;
+			gap: 6px;
+			font-size: 12px;
+			font-weight: 600;
+			padding: 4px 10px;
+			border-radius: 20px;
+			background: linear-gradient(135deg, hsla(var(--accent-hue), 75%, 45%, 0.15), hsla(var(--accent-hue), 75%, 45%, 0.05));
+			border: 1px solid var(--accent-glow);
+			color: var(--accent);
+			cursor: pointer;
+			transition: all 0.2s ease;
+		}
+		#credit-badge:hover {
+			background: linear-gradient(135deg, hsla(var(--accent-hue), 75%, 45%, 0.25), hsla(var(--accent-hue), 75%, 45%, 0.1));
+			transform: translateY(-1px);
+			box-shadow: 0 2px 8px var(--accent-glow);
+		}
+		#credit-badge:active {
+			transform: translateY(0);
+		}
 		.top-btn {
 			background: none;
 			color: var(--vscode-foreground);
@@ -246,7 +334,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			font-weight: 500;
 			display: flex;
 			align-items: center;
-			gap: 4px;
+			gap: 6px;
 			transition: all 0.2s ease;
 		}
 		.top-btn:hover {
@@ -549,6 +637,37 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			border-color: var(--vscode-focusBorder);
 		}
 		#message-input:disabled { opacity: 0.5; }
+		#model-input {
+			background: var(--vscode-input-background);
+			color: var(--vscode-input-foreground);
+			border: 1px solid var(--vscode-input-border, var(--border-color));
+			padding: 8px 6px;
+			border-radius: 4px;
+			font-family: var(--font-sans);
+			font-size: 12px;
+			outline: none;
+			cursor: pointer;
+			max-width: 140px;
+			transition: border-color 0.2s;
+		}
+		#model-input:focus {
+			border-color: var(--vscode-focusBorder);
+		}
+		#custom-model-input {
+			background: var(--vscode-input-background);
+			color: var(--vscode-input-foreground);
+			border: 1px solid var(--vscode-input-border, var(--border-color));
+			padding: 8px 10px;
+			border-radius: 4px;
+			font-family: var(--font-sans);
+			font-size: 12px;
+			outline: none;
+			max-width: 120px;
+			transition: border-color 0.2s;
+		}
+		#custom-model-input:focus {
+			border-color: var(--vscode-focusBorder);
+		}
 		#send-button {
 			background: var(--vscode-button-background);
 			color: var(--vscode-button-foreground);
@@ -683,9 +802,14 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
 	<div id="top-bar">
-		<button class="top-btn" id="reset-btn" title="New conversation">🗑️ Reset</button>
-		<button class="top-btn" id="settings-toggle" title="Settings">⚙️ Settings</button>
-		<button class="top-btn" id="audit-toggle" title="Review & Test Workspace">🔍 Audit</button>
+		<div id="credit-badge" title="Click to refresh balance">
+			<span class="credit-icon" style="display: inline-block; vertical-align: middle;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v12M15 9H11.5a2.5 2.5 0 0 0 0 5h3a2.5 2.5 0 0 1 0 5H9"></path></svg></span>
+			<span id="credit-value">--</span>
+			<span style="font-size: 10px; opacity: 0.8; font-weight: 400;">credits</span>
+		</div>
+		<button class="top-btn" id="reset-btn" title="New conversation"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg> Reset</button>
+		<button class="top-btn" id="settings-toggle" title="Settings"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg> Settings</button>
+		<button class="top-btn" id="audit-toggle" title="Review & Test Workspace"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg> Audit</button>
 	</div>
 
 	<div id="settings-panel">
@@ -698,29 +822,19 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			<input type="text" id="api-url-input" placeholder="https://api.kie.ai" />
 		</div>
 		<div class="setting-row">
-			<label for="model-input">Model</label>
-			<select id="model-input">
-				<option value="gpt-5-5">gpt-5-5 (GPT 5.5)</option>
-				<option value="gpt-5-codex">gpt-5-codex</option>
-				<option value="gpt-5.1-codex">gpt-5.1-codex</option>
-				<option value="custom">Autre (Saisir ci-dessous...)</option>
-			</select>
-			<input type="text" id="custom-model-input" placeholder="nom-du-modele" style="margin-top: 4px; display: none;" />
-		</div>
-		<div class="setting-row">
-			<label for="command-approval-input">Autorisation des Commandes</label>
+			<label for="command-approval-input">Command Approval Mode</label>
 			<select id="command-approval-input">
-				<option value="prompt">Demander à chaque fois (Prompt)</option>
-				<option value="acceptAll">Tout autoriser automatiquement</option>
-				<option value="rejectAll">Tout refuser automatiquement</option>
+				<option value="prompt">Always Prompt</option>
+				<option value="acceptAll">Allow All Automatically</option>
+				<option value="rejectAll">Reject All Automatically</option>
 			</select>
 		</div>
 		<div class="setting-row">
-			<label for="file-approval-input">Autorisation du Code (Fichiers)</label>
+			<label for="file-approval-input">File Write Approval Mode</label>
 			<select id="file-approval-input">
-				<option value="prompt">Demander à chaque fois (Prompt)</option>
-				<option value="acceptAll">Tout autoriser automatiquement</option>
-				<option value="rejectAll">Tout refuser automatiquement</option>
+				<option value="prompt">Always Prompt</option>
+				<option value="acceptAll">Allow All Automatically</option>
+				<option value="rejectAll">Reject All Automatically</option>
 			</select>
 		</div>
 		<button id="save-settings-button">Save Settings</button>
@@ -728,7 +842,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 
 	<div id="audit-panel">
 		<div class="audit-header">
-			<h3>🔍 Workspace Audit & Self-Correction</h3>
+			<h3>Workspace Audit & Self-Correction</h3>
 			<p>Ask Zelos to run tests, critique code quality, and apply fixes automatically.</p>
 		</div>
 		<div class="setting-row">
@@ -773,9 +887,16 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 
 	<div id="input-container">
 		<input type="text" id="message-input" placeholder="Ask Zelos..." />
-		<div class="toggle-container" title="Auto-valider les fichiers créés (pas de demandes de confirmation)">
+		<select id="model-input" title="Choose AI Model">
+			<option value="gpt-5-5">gpt-5-5</option>
+			<option value="gpt-5-codex">gpt-5-codex</option>
+			<option value="gpt-5.1-codex">gpt-5.1-codex</option>
+			<option value="custom">Other...</option>
+		</select>
+		<input type="text" id="custom-model-input" placeholder="model-name" style="display: none;" title="Enter custom model" />
+		<div class="toggle-container" title="Auto-approve file creation/modifications (no confirmation prompts)">
 			<input type="checkbox" id="auto-approve-file-checkbox" class="toggle-checkbox" />
-			<label for="auto-approve-file-checkbox" class="toggle-label" title="Auto-valider les fichiers créés">
+			<label for="auto-approve-file-checkbox" class="toggle-label" title="Auto-approve file creation">
 				<span class="toggle-switch"></span>
 			</label>
 		</div>
@@ -798,6 +919,13 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		const fileApprovalInput = document.getElementById('file-approval-input');
 		const saveBtn = document.getElementById('save-settings-button');
 		const resetBtn = document.getElementById('reset-btn');
+		const creditBadge = document.getElementById('credit-badge');
+		const creditValue = document.getElementById('credit-value');
+
+		creditBadge.addEventListener('click', () => {
+			creditValue.textContent = '--';
+			vscode.postMessage({ type: 'refreshCredits' });
+		});
 		const autoApproveCheckbox = document.getElementById('auto-approve-file-checkbox');
 		const auditToggle = document.getElementById('audit-toggle');
 		const auditPanel = document.getElementById('audit-panel');
@@ -955,28 +1083,28 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		function approveCommand(btn) {
 			const parent = btn.closest('.msg-approval');
 			parent.classList.add('approved');
-			parent.querySelector('.approval-actions').innerHTML = '<span class="status-approved">✅ Autorisée (En cours...)</span>';
+			parent.querySelector('.approval-actions').innerHTML = '<span class="status-approved">Approved (Executing...)</span>';
 			vscode.postMessage({ type: 'approveCommand' });
 		}
 
 		function rejectCommand(btn) {
 			const parent = btn.closest('.msg-approval');
 			parent.classList.add('rejected');
-			parent.querySelector('.approval-actions').innerHTML = '<span class="status-rejected">❌ Refusée</span>';
+			parent.querySelector('.approval-actions').innerHTML = '<span class="status-rejected">Rejected</span>';
 			vscode.postMessage({ type: 'rejectCommand' });
 		}
 
 		function approveFile(btn) {
 			const parent = btn.closest('.msg-approval');
 			parent.classList.add('approved');
-			parent.querySelector('.approval-actions').innerHTML = '<span class="status-approved">✅ Validée (Écriture...)</span>';
+			parent.querySelector('.approval-actions').innerHTML = '<span class="status-approved">Approved (Writing...)</span>';
 			vscode.postMessage({ type: 'approveFile' });
 		}
 
 		function rejectFile(btn) {
 			const parent = btn.closest('.msg-approval');
 			parent.classList.add('rejected');
-			parent.querySelector('.approval-actions').innerHTML = '<span class="status-rejected">❌ Refusée</span>';
+			parent.querySelector('.approval-actions').innerHTML = '<span class="status-rejected">Rejected</span>';
 			vscode.postMessage({ type: 'rejectFile' });
 		}
 
@@ -1037,21 +1165,43 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			auditPanel.style.display = 'none';
 		});
 
-		modelSelect.addEventListener('change', () => {
-			customModelInput.style.display = modelSelect.value === 'custom' ? 'block' : 'none';
-		});
-
-		saveBtn.addEventListener('click', () => {
+		function saveSelectedModel() {
 			let selectedModel = modelSelect.value;
 			if (selectedModel === 'custom') {
 				selectedModel = customModelInput.value.trim() || 'gpt-5-5';
 			}
+			vscode.postMessage({
+				type: 'updateModel',
+				value: selectedModel
+			});
+		}
 
+		modelSelect.addEventListener('change', () => {
+			if (modelSelect.value === 'custom') {
+				customModelInput.style.display = 'block';
+				customModelInput.focus();
+			} else {
+				customModelInput.style.display = 'none';
+				saveSelectedModel();
+			}
+		});
+
+		customModelInput.addEventListener('blur', () => {
+			saveSelectedModel();
+		});
+
+		customModelInput.addEventListener('keypress', (e) => {
+			if (e.key === 'Enter') {
+				saveSelectedModel();
+				customModelInput.blur();
+			}
+		});
+
+		saveBtn.addEventListener('click', () => {
 			vscode.postMessage({
 				type: 'saveSettings',
 				apiKey: apiKeyInput.value.trim(),
 				apiUrl: apiUrlInput.value.trim(),
-				model: selectedModel,
 				commandApprovalMode: commandApprovalInput.value,
 				fileApprovalMode: fileApprovalInput.value
 			});
@@ -1094,6 +1244,15 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		window.addEventListener('message', event => {
 			const msg = event.data;
 			switch (msg.type) {
+				case 'creditUpdate':
+					if (msg.value !== null && msg.value !== undefined) {
+						creditValue.textContent = msg.value;
+						creditBadge.style.display = 'flex';
+					} else {
+						creditBadge.style.display = 'none';
+					}
+					break;
+
 				case 'initSettings':
 					apiKeyInput.value = msg.apiKey;
 					apiUrlInput.value = msg.apiUrl;
@@ -1150,14 +1309,14 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 					const div = document.createElement('div');
 					div.className = 'msg msg-approval';
 					div.innerHTML = 
-						'<div class="approval-header">💻 <strong>Autorisation de Commande</strong></div>' +
+						'<div class="approval-header"><strong>Command Approval Required</strong></div>' +
 						'<div class="approval-body">' +
-							'Voulez-vous autoriser Zelos à exécuter la commande suivante ?' +
+							'Do you want to authorize Zelos to execute the following command?' +
 							'<pre><code>' + escapeHtml(msg.command) + '</code></pre>' +
 						'</div>' +
 						'<div class="approval-actions">' +
-							'<button class="approve-btn approve-cmd-btn">Autoriser</button>' +
-							'<button class="reject-btn reject-cmd-btn">Refuser</button>' +
+							'<button class="approve-btn approve-cmd-btn">Approve</button>' +
+							'<button class="reject-btn reject-cmd-btn">Reject</button>' +
 						'</div>';
 					history.appendChild(div);
 					history.scrollTop = history.scrollHeight;
@@ -1174,18 +1333,18 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 					const previewLines = lines.slice(0, 30);
 					let previewText = previewLines.join('\\n');
 					if (lines.length > 30) {
-						previewText += '\\n... (tronqué)';
+						previewText += '\\n... (truncated)';
 					}
 					
 					div.innerHTML = 
-						'<div class="approval-header">📄 <strong>Autorisation d\u2019Écriture de Fichier</strong></div>' +
+						'<div class="approval-header"><strong>File Write Approval Required</strong></div>' +
 						'<div class="approval-body">' +
-							'Voulez-vous autoriser Zelos à écrire dans le fichier <code>' + escapeHtml(msg.path) + '</code> ?' +
+							'Do you want to authorize Zelos to write to the file <code>' + escapeHtml(msg.path) + '</code>?' +
 							'<pre><code>' + escapeHtml(previewText) + '</code></pre>' +
 						'</div>' +
 						'<div class="approval-actions">' +
-							'<button class="approve-btn approve-file-btn">Accepter</button>' +
-							'<button class="reject-btn reject-file-btn">Refuser</button>' +
+							'<button class="approve-btn approve-file-btn">Approve</button>' +
+							'<button class="reject-btn reject-file-btn">Reject</button>' +
 						'</div>';
 					history.appendChild(div);
 					history.scrollTop = history.scrollHeight;
