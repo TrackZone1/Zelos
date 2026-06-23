@@ -83,9 +83,13 @@ const SYSTEM_PROMPT_BODY = [
 	'The user CANNOT use code that is only displayed as text. It MUST be written to a file.',
 	'',
 	'## Rules',
-	'- You can use multiple tools in a single response.',
+	'- Think and work STEP BY STEP.',
+	'- You are STRICTLY LIMITED to using a maximum of 2 tools per response.',
+	'- Do NOT generate entire projects in a single response. Create or edit one or two files, wait for the result, then continue.',
+	'- ALWAYS prefer using <run_command> with CLI scaffolding tools (e.g., npm create, npx) to generate boilerplate rather than writing config files manually.',
+	'- NEVER announce what you are going to do without doing it. If you want to list files, output the <list_files> tag in the SAME response. Every response MUST contain at least one tool call until the task is complete.',
 	'- After each tool execution the system returns the result and you are called again.',
-	'- Continue acting until the task is fully complete. When done, reply with a SHORT plain text summary (no tool tags, no code).',
+	'- Continue acting until the task is fully complete. When done, you MUST use the <done> tag: <done>Your short plain text summary here</done>',
 	'- If a command fails, analyse the error and fix it yourself.',
 	'- Always read a file before modifying it, unless you just created it.',
 	'- Keep explanations very short (2-3 sentences max).',
@@ -385,7 +389,7 @@ export class Agent {
 		}
 
 		// Append a tool-usage reminder to reinforce system prompt
-		content += '\n\n[IMPORTANT: Write ALL code to files using <create_file path="...">. Do NOT output code as text in your response.]';
+		content += '\n\n[IMPORTANT: You DO have access to terminal commands and files. Use <run_command cmd="..."> for CLI tools and <create_file path="..."> for writing code. Work step-by-step (max 2 tools at a time). Do NOT output code as text.]';
 		return content;
 	}
 
@@ -543,6 +547,17 @@ export class Agent {
 					continue;
 				}
 
+				// Guard against monolithic generation
+				const createFileMatches = reply.match(/<create_file/g) || [];
+				if (createFileMatches.length > 3) {
+					this._emit({ type: 'status', message: 'Agent tried to create too many files at once. Intercepting...' });
+					this._history.push({
+						role: 'user',
+						content: '[SYSTEM CORRECTION] You are trying to create too many files at once. This causes context overload. Stop generating the entire project. Break down your work and create a maximum of 2 files at a time.'
+					});
+					continue;
+				}
+
 				// Execute any tools found in the reply
 				const { uiMessage, toolResults } = await this._toolExecutor.executeActions(
 					reply,
@@ -550,6 +565,29 @@ export class Agent {
 					reqFileApproval,
 					(status) => this._emit({ type: 'status', message: status })
 				);
+
+				const isDone = reply.includes('<done>');
+				if (toolResults.length === 0 && !isDone) {
+					// The agent tried to just chat without using tools.
+					this._emit({ type: 'status', message: 'Agent replied without tools. Forcing tool usage...' });
+					
+					// Remove the invalid assistant reply from history so it doesn't get stuck in a loop
+					if (this._history.length > 0 && this._history[this._history.length - 1].role === 'assistant') {
+						this._history.pop();
+					}
+					
+					const lastMsg = this._history[this._history.length - 1];
+					const hasCorrection = lastMsg && lastMsg.role === 'user' && typeof lastMsg.content === 'string' && lastMsg.content.includes('[SYSTEM CORRECTION] You just replied');
+					
+					if (!hasCorrection) {
+						this._history.push({
+							role: 'user',
+							content: '[SYSTEM CORRECTION] You just replied with conversational text without using any XML tools. You MUST use a tool (like <create_file>, <run_command>, or <list_files>) to make progress toward the user\'s GOAL. Do not announce your intentions, just execute the tools. If the ENTIRE task is completely finished, you MUST use the <done> tag: <done>Summary</done>. Please retry.'
+						});
+					}
+					
+					continue;
+				}
 
 				if (toolResults.length > 0) {
 					hasExecutedTools = true;
@@ -579,9 +617,14 @@ export class Agent {
 					this._history.push({ role: 'user', content: feedback });
 					// Continue loop — the model needs to see the results
 				} else {
-					// No tools → final answer
-					// Truncate if suspiciously long (model might still be leaking code)
-					const finalMessage = this._sanitizeFinalResponse(uiMessage);
+					// isDone is true, or no tools were found but it's the end of the line
+					let finalMessage = uiMessage;
+					const doneMatch = reply.match(/<done>([\s\S]*?)<\/done>/);
+					if (doneMatch) {
+						finalMessage = doneMatch[1].trim();
+					} else {
+						finalMessage = this._sanitizeFinalResponse(uiMessage);
+					}
 
 					// ── Critic Sub-Agent Reviews ──
 					let doAutoCorrection = false;
