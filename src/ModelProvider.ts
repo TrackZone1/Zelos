@@ -116,40 +116,33 @@ export class ModelProvider {
 			const nonSystemHistory = history.filter(m => m.role !== 'system');
 			return {
 				contents: await this._buildGeminiContents(nonSystemHistory),
-				systemInstruction,
+				system_instruction: systemInstruction,
 				stream: false
 			};
 		}
 
 		// ── 2. Claude ─────────────────────────────────────────────────────
 		if (modelDetails.family === 'claude') {
-			const systemMessage = history.find(m => m.role === 'system');
-			let systemText: string | undefined = undefined;
-			if (systemMessage) {
-				systemText = typeof systemMessage.content === 'string'
-					? systemMessage.content
-					: systemMessage.content.map(p => p.text).join('\n');
-			}
-
-			const nonSystemHistory = history.filter(m => m.role !== 'system');
-			const { messages } = this._buildOpenAiLikeMessages(nonSystemHistory, false);
+			const { messages, system } = this._buildOpenAiLikeMessages(history, 'none');
 			return {
-				model: model === 'gemini-3-flash-v1beta' ? 'gemini-3-flash-v1beta' : model,
-				system: systemText?.trim(),
+				model: model,
 				messages,
+				system,
+				tools: this._getClaudeToolsDeclaration(),
+				thinkingFlag: true,
 				stream: false,
 				max_tokens: 4096
 			};
 		}
 
 		// ── 3. OpenAI Chat Completions (GPT & Gemini OpenAI-compatible) ──
+		// These models need proper system/user/assistant roles to function.
 		if (modelDetails.family === 'gemini-openai' || modelDetails.family === 'gpt-openai') {
-			// Extract correct model ID for request body (if needed)
 			let actualModelId = model;
 			if (model.endsWith('-openai')) {
 				actualModelId = model.replace('-openai', '').replace('3.5', '3.5');
 			}
-			const { messages } = this._buildOpenAiLikeMessages(history, false);
+			const { messages } = this._buildOpenAiLikeMessages(history, 'system-message');
 			return {
 				model: actualModelId,
 				messages,
@@ -158,78 +151,30 @@ export class ModelProvider {
 		}
 
 		// ── 4. Codex/Responses ────────────────────────────────────────────
-		// Standard multi-turn/condensed Codex payload
-		let input: any[];
-		if (model === 'gpt-5-5' || model === 'gpt-5-4') {
-			const systemPrompt = history.find(m => m.role === 'system')?.content || '';
-			const conversationTurns: string[] = [];
-
-			for (const msg of history) {
-				if (msg.role === 'system') continue;
-				const roleLabel = msg.role === 'user' ? 'User' : 'Assistant (Zelos)';
-				if (typeof msg.content === 'string') {
-					conversationTurns.push(`${roleLabel}: ${msg.content}`);
-				} else {
-					let textParts = '';
-					let imageUrls: string[] = [];
-					for (const part of msg.content) {
-						if (part.type === 'input_text' && part.text) {
-							textParts += part.text;
-						} else if (part.type === 'input_image' && part.image_url) {
-							imageUrls.push(part.image_url);
-						}
+		// Codex models use the Responses API with native role support.
+		// They NEED the system role to adopt the Zelos identity properly.
+		const input = history.map(msg => {
+			if (typeof msg.content === 'string') {
+				return {
+					role: msg.role,
+					content: [{
+						type: msg.role === 'assistant' ? 'output_text' : 'input_text',
+						text: msg.content
+					}],
+				};
+			} else {
+				const content = msg.content.map(part => {
+					if (part.type === 'input_text' && msg.role === 'assistant') {
+						return { ...part, type: 'output_text' };
 					}
-					let turnStr = `${roleLabel}: ${textParts}`;
-					if (imageUrls.length > 0) {
-						turnStr += ` [Attached Images: ${imageUrls.join(', ')}]`;
-					}
-					conversationTurns.push(turnStr);
-				}
+					return part;
+				});
+				return {
+					role: msg.role,
+					content
+				};
 			}
-
-			const condensedPrompt = [
-				systemPrompt,
-				'',
-				'## Conversation History',
-				...conversationTurns,
-				'',
-				'## Instruction',
-				'Continue the task by executing the next step (using tool tags) or reply with a short summary if complete.'
-			].join('\n');
-
-			const contentParts: any[] = [{ type: 'input_text', text: condensedPrompt }];
-			for (const msg of history) {
-				if (msg.role === 'user' && Array.isArray(msg.content)) {
-					for (const part of msg.content) {
-						if (part.type === 'input_image' && part.image_url) {
-							contentParts.push({ type: 'input_image', image_url: part.image_url });
-						}
-					}
-				}
-			}
-
-			input = [
-				{
-					role: 'user',
-					content: contentParts
-				}
-			];
-		} else {
-			// Standard Codex format for other codex models
-			input = history.map(msg => {
-				if (typeof msg.content === 'string') {
-					return {
-						role: msg.role,
-						content: [{ type: 'input_text', text: msg.content }],
-					};
-				} else {
-					return {
-						role: msg.role,
-						content: msg.content
-					};
-				}
-			});
-		}
+		});
 
 		return {
 			model,
@@ -238,23 +183,36 @@ export class ModelProvider {
 		};
 	}
 
+
 	/** Extracts the generated text from KIE API response. */
 	public static extractReply(data: any): string {
 		if (!data) return '';
 
+		let result = '';
+
 		// 1. Gemini Native format
 		if (data.candidates?.[0]?.content?.parts?.[0]) {
 			const textPart = data.candidates[0].content.parts.find((p: any) => p.text !== undefined);
-			if (textPart) return textPart.text;
+			if (textPart) result = textPart.text;
 		}
 
 		// 2. Claude format (e.g. content: [{ type: 'text', text: '...' }])
 		if (data.content && Array.isArray(data.content)) {
-			const textPart = data.content.find((c: any) => c.type === 'text');
-			if (textPart && textPart.text !== undefined) return textPart.text;
-			
-			const textDirect = data.content.find((c: any) => c.text !== undefined);
-			if (textDirect && textDirect.text !== undefined) return textDirect.text;
+			const textParts = data.content.filter((c: any) => c.type === 'text' && typeof c.text === 'string');
+			if (textParts.length > 0) {
+				result = textParts.map((p: any) => p.text).join('\n');
+			} else {
+				const textDirect = data.content.find((c: any) => c.text !== undefined);
+				if (textDirect && textDirect.text !== undefined) result = textDirect.text;
+			}
+
+			// Convert native tool calls to XML
+			const toolParts = data.content.filter((c: any) => c.type === 'tool_use');
+			for (const tool of toolParts) {
+				const name = tool.name;
+				const args = JSON.stringify(tool.input || {});
+				result += `\n<tool_call name="${name}" arguments="${args.replace(/"/g, '&quot;')}"></tool_call>`;
+			}
 		}
 
 		// 3. KIE Codex format
@@ -262,13 +220,31 @@ export class ModelProvider {
 			const msg = data.output.find((o: any) => o.role === 'assistant');
 			if (msg?.content && Array.isArray(msg.content)) {
 				const text = msg.content.find((c: any) => c.type === 'output_text');
-				if (text) return text.text;
+				if (text) result = text.text;
 			}
 		}
 
 		// 4. OpenAI standard format
-		if (data.choices?.[0]?.message?.content !== undefined) {
-			return data.choices[0].message.content;
+		if (data.choices?.[0]?.message) {
+			const message = data.choices[0].message;
+			if (message.content !== undefined && message.content !== null) {
+				result = message.content;
+			}
+
+			// Convert native tool calls to XML
+			if (message.tool_calls && Array.isArray(message.tool_calls)) {
+				for (const call of message.tool_calls) {
+					if (call.function) {
+						const name = call.function.name;
+						const args = call.function.arguments || '{}';
+						result += `\n<tool_call name="${name}" arguments="${args.replace(/"/g, '&quot;')}"></tool_call>`;
+					}
+				}
+			}
+		}
+
+		if (result) {
+			return result;
 		}
 
 		// 5. Raw string response or stringified fallback
@@ -361,8 +337,8 @@ export class ModelProvider {
 		return geminiContents;
 	}
 
-	/** Builds standard OpenAI/Claude message format. Prepend system message to first user msg if systemNotAllowed in array. */
-	private static _buildOpenAiLikeMessages(history: ChatMessage[], systemNotAllowed: boolean): { messages: any[], system?: string } {
+	/** Builds standard OpenAI/Claude message format. Prepend system message to first user msg if systemMode is 'prepend'. */
+	private static _buildOpenAiLikeMessages(history: ChatMessage[], systemMode: 'prepend' | 'system-message' | 'none'): { messages: any[], system?: string } {
 		const messages: any[] = [];
 		let systemPrompt = '';
 
@@ -406,9 +382,9 @@ export class ModelProvider {
 			});
 		}
 
-		// Inject system prompt into first user message if systemNotAllowed (e.g. Claude)
+		// Inject system prompt based on mode
 		if (systemPrompt) {
-			if (systemNotAllowed) {
+			if (systemMode === 'prepend') {
 				const firstUserIdx = messages.findIndex(m => m.role === 'user');
 				if (firstUserIdx !== -1) {
 					const firstUser = messages[firstUserIdx];
@@ -423,7 +399,7 @@ export class ModelProvider {
 						}
 					}
 				}
-			} else {
+			} else if (systemMode === 'system-message') {
 				// Standard system role insertion at front
 				messages.unshift({
 					role: 'system',
@@ -433,5 +409,79 @@ export class ModelProvider {
 		}
 
 		return { messages, system: systemPrompt.trim() || undefined };
+	}
+
+	private static _getClaudeToolsDeclaration(): any[] {
+		return [
+			{
+				name: 'create_file',
+				description: 'Create or overwrite a file with the specified content.',
+				input_schema: {
+					type: 'object',
+					properties: {
+						path: { type: 'string', description: 'Relative path to the file to create/write.' },
+						content: { type: 'string', description: 'Full content of the file.' }
+					},
+					required: ['path', 'content']
+				}
+			},
+			{
+				name: 'run_command',
+				description: 'Run a terminal command in the workspace directory.',
+				input_schema: {
+					type: 'object',
+					properties: {
+						cmd: { type: 'string', description: 'The shell command to execute.' }
+					},
+					required: ['cmd']
+				}
+			},
+			{
+				name: 'edit_file',
+				description: 'Edit a file using search and replace blocks. Use this for modifying specific lines instead of rewriting the whole file.',
+				input_schema: {
+					type: 'object',
+					properties: {
+						path: { type: 'string', description: 'Relative path to the file to edit.' },
+						content: { type: 'string', description: 'The search and replace blocks.' }
+					},
+					required: ['path', 'content']
+				}
+			},
+			{
+				name: 'read_file',
+				description: 'Read the contents of an existing file.',
+				input_schema: {
+					type: 'object',
+					properties: {
+						path: { type: 'string', description: 'Relative path to the file to read.' }
+					},
+					required: ['path']
+				}
+			},
+			{
+				name: 'list_files',
+				description: 'List files and directories in a path.',
+				input_schema: {
+					type: 'object',
+					properties: {
+						path: { type: 'string', description: 'Relative path to list (default: ".").' }
+					},
+					required: ['path']
+				}
+			},
+			{
+				name: 'visual_review',
+				description: 'Ask a separate visual model to review page UI, click, type, and verify functionality on Chrome.',
+				input_schema: {
+					type: 'object',
+					properties: {
+						url: { type: 'string', description: 'URL to navigate to.' },
+						instruction: { type: 'string', description: 'Action/review instruction.' }
+					},
+					required: ['url', 'instruction']
+				}
+			}
+		];
 	}
 }

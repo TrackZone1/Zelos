@@ -20,16 +20,23 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		content: string;
 	};
 
+	private _contentProvider = new ZelosContentProvider();
+
 	constructor(
 		private readonly _extensionUri: vscode.Uri,
 	) {
+		vscode.workspace.registerTextDocumentContentProvider('zelos-preview', this._contentProvider);
 		this._agent = new Agent(
 			(event: AgentEvent) => {
 				if (!this._view) return;
 				if (event.type === 'critic_review' && event.criticResults) {
 					this._view.webview.postMessage({ type: 'critic_review', results: event.criticResults });
 				} else {
-					this._view.webview.postMessage({ type: event.type, value: event.message });
+					this._view.webview.postMessage({
+						type: event.type,
+						value: event.message,
+						usage: event.usage
+					});
 				}
 			},
 			async (command: string) => {
@@ -97,6 +104,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 						profiles
 					});
 					this._updateCredits();
+					this._updateSessionChanges();
 					break;
 				}
 				case 'launchChrome': {
@@ -189,6 +197,22 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 					this._agent.resetConversation();
 					break;
 				}
+				case 'exportChat': {
+					this._exportChatHistory();
+					break;
+				}
+				case 'viewFileDiff': {
+					this._showProposedDiff(data.path, data.content);
+					break;
+				}
+				case 'viewBackupDiff': {
+					this._showBackupDiff(data.path);
+					break;
+				}
+				case 'revertFileChange': {
+					this._revertFileChange(data.path);
+					break;
+				}
 				case 'saveSettings': {
 					const config = vscode.workspace.getConfiguration('zelos');
 					Promise.all([
@@ -247,11 +271,32 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		});
 	}
 
+	private async _exportChatHistory() {
+		const history = this._agent.getHistory();
+		const options: vscode.SaveDialogOptions = {
+			defaultUri: vscode.Uri.file(path.join(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '', 'zelos-chat-history.json')),
+			filters: {
+				'JSON/Text Files': ['json', 'txt']
+			},
+			title: 'Export Chat History'
+		};
+		const fileUri = await vscode.window.showSaveDialog(options);
+		if (fileUri) {
+			try {
+				fs.writeFileSync(fileUri.fsPath, JSON.stringify(history, null, 2), 'utf8');
+				vscode.window.showInformationMessage('Chat history exported successfully!');
+			} catch (err: any) {
+				vscode.window.showErrorMessage(`Failed to export chat: ${err.message}`);
+			}
+		}
+	}
+
 	private async _handleChatMessage(message: string, base64Image?: string) {
 		if (!this._view) return;
 		this._view.webview.postMessage({ type: 'userMessage', value: message, image: base64Image });
 		await this._agent.handleUserMessage(message, base64Image);
 		this._updateCredits();
+		this._updateSessionChanges();
 	}
 
 	private async _handleAuditMessage(options: {
@@ -267,6 +312,65 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		this._view.webview.postMessage({ type: 'userMessage', value: 'Starting Workspace Audit...' });
 		await this._agent.runAudit(options);
 		this._updateCredits();
+		this._updateSessionChanges();
+	}
+
+	private _showProposedDiff(filePath: string, proposedContent: string) {
+		const workspaceFolders = vscode.workspace.workspaceFolders;
+		if (!workspaceFolders || workspaceFolders.length === 0) return;
+		const workspaceRoot = workspaceFolders[0].uri;
+		const fileUri = vscode.Uri.joinPath(workspaceRoot, filePath);
+		
+		const previewUri = fileUri.with({ scheme: 'zelos-preview', query: 'proposed' });
+		this._contentProvider.setContent(previewUri, proposedContent);
+
+		vscode.commands.executeCommand(
+			'vscode.diff',
+			fileUri,
+			previewUri,
+			`${path.basename(filePath)} (Current ↔ Proposed)`
+		);
+	}
+
+	private _showBackupDiff(filePath: string) {
+		const workspaceFolders = vscode.workspace.workspaceFolders;
+		if (!workspaceFolders || workspaceFolders.length === 0) return;
+		const workspaceRoot = workspaceFolders[0].uri;
+		const fileUri = vscode.Uri.joinPath(workspaceRoot, filePath);
+		
+		const backupContent = this._agent.getBackupContent(filePath);
+		if (backupContent === undefined) {
+			vscode.window.showErrorMessage(`No backup content found for ${filePath}`);
+			return;
+		}
+
+		const backupUri = fileUri.with({ scheme: 'zelos-preview', query: 'backup' });
+		this._contentProvider.setContent(backupUri, backupContent || '');
+
+		vscode.commands.executeCommand(
+			'vscode.diff',
+			backupUri,
+			fileUri,
+			`${path.basename(filePath)} (Backup ↔ Current)`
+		);
+	}
+
+	private async _revertFileChange(filePath: string) {
+		const success = await this._agent.revertFile(filePath);
+		if (success) {
+			vscode.window.showInformationMessage(`Reverted changes to ${filePath}`);
+			this._updateSessionChanges();
+		} else {
+			vscode.window.showErrorMessage(`Failed to revert changes to ${filePath}`);
+		}
+	}
+
+	private _updateSessionChanges() {
+		const changes = this._agent.getSessionChanges();
+		this._view?.webview.postMessage({
+			type: 'updateChanges',
+			changes
+		});
 	}
 
 	private async _updateCredits() {
@@ -380,6 +484,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		#top-bar {
 			display: flex;
 			justify-content: flex-end;
+			flex-wrap: wrap;
 			gap: 8px;
 			margin-bottom: 8px;
 			padding-bottom: 8px;
@@ -437,8 +542,24 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			border-color: var(--vscode-focusBorder);
 		}
 
+		.diff-btn {
+			background: var(--vscode-button-secondaryBackground, #5f5f5f);
+			color: var(--vscode-button-secondaryForeground, #ffffff);
+			border: none;
+			padding: 4px 10px;
+			cursor: pointer;
+			border-radius: 4px;
+			font-size: 11px;
+			font-family: var(--font-sans);
+			font-weight: 600;
+			transition: all 0.2s ease;
+		}
+		.diff-btn:hover {
+			background: var(--vscode-button-secondaryHoverBackground, #4f4f4f);
+		}
+
 		/* ── Settings Panel ──────────────────── */
-		#settings-panel {
+		#settings-panel, #changes-panel {
 			display: none;
 			flex-direction: column;
 			gap: 10px;
@@ -948,12 +1069,48 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			overflow: hidden;
 			text-overflow: ellipsis;
 		}
+		.critic-edit-name {
+			background: transparent;
+			border: 1px solid transparent;
+			color: var(--vscode-foreground);
+			font-weight: 600;
+			font-size: 12px;
+			width: 100%;
+			padding: 0;
+			outline: none;
+			font-family: var(--font-sans);
+		}
+		.critic-edit-name:hover, .critic-edit-name:focus {
+			border-bottom: 1px solid var(--vscode-focusBorder);
+		}
+		.critic-edit-model {
+			background: transparent;
+			border: 1px solid transparent;
+			color: var(--vscode-descriptionForeground);
+			font-size: 10px;
+			outline: none;
+			padding: 0;
+			width: auto;
+			max-width: 100px;
+			font-family: var(--font-sans);
+			cursor: pointer;
+		}
+		.critic-edit-model:hover, .critic-edit-model:focus {
+			border-bottom: 1px solid var(--vscode-focusBorder);
+		}
+		.critic-edit-model option {
+			background: var(--vscode-dropdown-background);
+			color: var(--vscode-dropdown-foreground);
+		}
 		.critic-agent-meta {
 			font-size: 10px;
 			color: var(--vscode-descriptionForeground);
 			white-space: nowrap;
 			overflow: hidden;
 			text-overflow: ellipsis;
+			display: flex;
+			align-items: center;
+			gap: 4px;
 		}
 		.critic-agent-toggle {
 			flex-shrink: 0;
@@ -1120,6 +1277,19 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			background: var(--vscode-toolbar-hoverBackground);
 			border-color: var(--vscode-focusBorder);
 		}
+		.msg-usage {
+			display: flex;
+			align-items: center;
+			justify-content: flex-end;
+			gap: 8px;
+			font-size: 10px;
+			color: var(--vscode-descriptionForeground);
+			margin-top: 6px;
+			border-top: 1px dashed var(--border-color);
+			padding-top: 4px;
+			opacity: 0.8;
+			font-family: var(--font-sans);
+		}
 	</style>
 </head>
 <body>
@@ -1131,6 +1301,8 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		</div>
 		<button class="top-btn" id="critic-toggle" title="Critic Sub-Agents"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg> Critics <span id="critic-count-badge" class="critic-count-badge" style="display: none;">0</span></button>
 		<button class="top-btn" id="reset-btn" title="New conversation"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg> Reset</button>
+		<button class="top-btn" id="export-btn" title="Export conversation as JSON"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg> Export</button>
+		<button class="top-btn" id="changes-toggle" title="Session Changes"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg> Changes <span id="changes-count-badge" class="critic-count-badge" style="display: none;">0</span></button>
 		<button class="top-btn" id="settings-toggle" title="Settings"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg> Settings</button>
 		<button class="top-btn" id="audit-toggle" title="Review & Test Workspace"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg> Audit</button>
 		<button class="top-btn" id="browser-toggle" title="Browser Control"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line><path d="M8 21h8M12 17v4"></path></svg> Browser</button>
@@ -1250,6 +1422,16 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		<button id="save-settings-button">Save Settings</button>
 	</div>
 
+	<div id="changes-panel">
+		<div class="changes-panel-header" style="margin-bottom: 8px;">
+			<h3 style="font-size: 13px; font-weight: 600; margin-bottom: 4px; color: var(--accent);">🛠️ Session Changes</h3>
+			<p style="font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 4px; line-height: 1.35;">Review files modified by Zelos during this session. You can view diffs or revert files to their original state.</p>
+		</div>
+		<div class="changes-list" id="changes-list" style="display: flex; flex-direction: column; gap: 6px;">
+			<div class="changes-empty" style="font-size: 11px; color: var(--vscode-descriptionForeground); text-align: center; padding: 8px; opacity: 0.7;">No files modified in this session.</div>
+		</div>
+	</div>
+
 	<div id="audit-panel">
 		<div class="audit-header">
 			<h3>Workspace Audit & Self-Correction</h3>
@@ -1312,6 +1494,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 					<option value="testing">🧪 Testing</option>
 					<option value="code-quality">📏 Code Quality</option>
 					<option value="devops">🌐 DevOps</option>
+					<option value="user-critique">🤔 Challenger</option>
 					<option value="custom">💬 Custom</option>
 				</select>
 			</div>
@@ -1432,8 +1615,13 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		const codeLanguageInput = document.getElementById('code-language-input');
 		const saveBtn = document.getElementById('save-settings-button');
 		const resetBtn = document.getElementById('reset-btn');
+		const exportBtn = document.getElementById('export-btn');
 		const creditBadge = document.getElementById('credit-badge');
 		const creditValue = document.getElementById('credit-value');
+		const changesToggle = document.getElementById('changes-toggle');
+		const changesPanel = document.getElementById('changes-panel');
+		const changesList = document.getElementById('changes-list');
+		const changesCountBadge = document.getElementById('changes-count-badge');
 
 		const browserToggle = document.getElementById('browser-toggle');
 		const browserPanel = document.getElementById('browser-panel');
@@ -1452,6 +1640,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 				auditPanel.style.display = 'none';
 				browserPanel.style.display = 'none';
 				criticPanel.style.display = 'none';
+				changesPanel.style.display = 'none';
 				apiKeyInput.focus();
 			} else {
 				creditValue.textContent = '--';
@@ -1517,8 +1706,12 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 					card.innerHTML =
 						'<span class="critic-agent-icon">' + icon + '</span>' +
 						'<div class="critic-agent-info">' +
-							'<div class="critic-agent-name">' + escapeHtml(agent.name) + '</div>' +
-							'<div class="critic-agent-meta">' + escapeHtml(agent.role) + ' \u2022 ' + escapeHtml(agent.model) + '</div>' +
+							'<input type="text" class="critic-edit-name" data-index="' + index + '" value="' + escapeHtml(agent.name) + '" />' +
+							'<div class="critic-agent-meta">' + escapeHtml(agent.role) + ' \u2022 ' +
+								'<select class="critic-edit-model" data-index="' + index + '">' +
+									document.getElementById('critic-model-input').innerHTML +
+								'</select>' +
+							'</div>' +
 						'</div>' +
 						'<div class="critic-agent-toggle">' +
 							'<input type="checkbox" id="' + toggleId + '" class="toggle-checkbox critic-enable-toggle" data-index="' + index + '" ' + (agent.enabled ? 'checked' : '') + ' />' +
@@ -1526,6 +1719,8 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 						'</div>' +
 						'<button class="critic-agent-delete" data-index="' + index + '" title="Remove">\u00D7</button>';
 					criticAgentsList.appendChild(card);
+					const select = card.querySelector('.critic-edit-model');
+					if (select) select.value = agent.model;
 				});
 			}
 			updateCriticCountBadge();
@@ -1547,6 +1742,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 				settingsPanel.style.display = 'none';
 				auditPanel.style.display = 'none';
 				browserPanel.style.display = 'none';
+				changesPanel.style.display = 'none';
 			}
 		});
 
@@ -1584,6 +1780,14 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			if (e.target.classList.contains('critic-enable-toggle')) {
 				const idx = parseInt(e.target.dataset.index, 10);
 				criticAgents[idx].enabled = e.target.checked;
+				saveCriticAgents();
+			} else if (e.target.classList.contains('critic-edit-name')) {
+				const idx = parseInt(e.target.dataset.index, 10);
+				criticAgents[idx].name = e.target.value;
+				saveCriticAgents();
+			} else if (e.target.classList.contains('critic-edit-model')) {
+				const idx = parseInt(e.target.dataset.index, 10);
+				criticAgents[idx].model = e.target.value;
 				saveCriticAgents();
 			}
 		});
@@ -1693,7 +1897,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 		}
 
 		// ── UI helpers ──────────────────────
-		function appendMessage(text, cls, image) {
+		function appendMessage(text, cls, image, usage) {
 			const div = document.createElement('div');
 			div.className = 'msg ' + cls;
 			if (cls === 'msg-user') {
@@ -1715,6 +1919,17 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 				div.textContent = text;
 			} else {
 				div.innerHTML = renderMarkdown(text);
+				if (usage && usage.cost !== undefined) {
+					const usageDiv = document.createElement('div');
+					usageDiv.className = 'msg-usage';
+					let usageStr = '';
+					if (usage.totalTokens) {
+						usageStr += usage.totalTokens + ' tokens \u2022 ';
+					}
+					usageStr += 'Cost: ' + usage.cost.toFixed(4) + ' credits';
+					usageDiv.textContent = usageStr;
+					div.appendChild(usageDiv);
+				}
 			}
 			history.appendChild(div);
 			history.scrollTop = history.scrollHeight;
@@ -1808,16 +2023,78 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 				approveFile(btn);
 			} else if (btn.classList.contains('reject-file-btn')) {
 				rejectFile(btn);
+			} else if (btn.classList.contains('diff-file-btn')) {
+				const path = btn.dataset.path;
+				const content = btn.dataset.content;
+				vscode.postMessage({ type: 'viewFileDiff', path, content });
 			}
 		});
 
 		// ── Event listeners ─────────────────
+		let sessionChanges = [];
+
+		function updateChangesCountBadge() {
+			const count = sessionChanges.length;
+			if (count > 0) {
+				changesCountBadge.textContent = count;
+				changesCountBadge.style.display = 'inline-flex';
+			} else {
+				changesCountBadge.style.display = 'none';
+			}
+		}
+
+		function renderChangesList() {
+			if (sessionChanges.length === 0) {
+				changesList.innerHTML = '<div class="changes-empty" style="font-size: 11px; color: var(--vscode-descriptionForeground); text-align: center; padding: 8px; opacity: 0.7;">No files modified in this session.</div>';
+			} else {
+				changesList.innerHTML = '';
+				sessionChanges.forEach((filePath) => {
+					const card = document.createElement('div');
+					card.className = 'critic-agent-card';
+					card.innerHTML =
+						'<span class="critic-agent-icon">📄</span>' +
+						'<div class="critic-agent-info" style="flex: 1; min-width: 0;">' +
+							'<div class="critic-agent-name" title="' + escapeHtml(filePath) + '" style="font-weight: 600; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(filePath) + '</div>' +
+						'</div>' +
+						'<div class="approval-actions" style="margin-left: auto; display: flex; gap: 4px; flex-shrink: 0;">' +
+							'<button class="approve-btn diff-change-btn" style="padding: 4px 8px; font-size: 10px;">Diff</button>' +
+							'<button class="reject-btn revert-change-btn" style="padding: 4px 8px; font-size: 10px;">Revert</button>' +
+						'</div>';
+					
+					const diffBtn = card.querySelector('.diff-change-btn');
+					const revertBtn = card.querySelector('.revert-change-btn');
+					
+					diffBtn.addEventListener('click', () => {
+						vscode.postMessage({ type: 'viewBackupDiff', path: filePath });
+					});
+					
+					revertBtn.addEventListener('click', () => {
+						vscode.postMessage({ type: 'revertFileChange', path: filePath });
+					});
+
+					changesList.appendChild(card);
+				});
+			}
+			updateChangesCountBadge();
+		}
+
+		changesToggle.addEventListener('click', () => {
+			changesPanel.style.display = changesPanel.style.display === 'flex' ? 'none' : 'flex';
+			if (changesPanel.style.display === 'flex') {
+				settingsPanel.style.display = 'none';
+				auditPanel.style.display = 'none';
+				browserPanel.style.display = 'none';
+				criticPanel.style.display = 'none';
+			}
+		});
+
 		settingsToggle.addEventListener('click', () => {
 			settingsPanel.style.display = settingsPanel.style.display === 'flex' ? 'none' : 'flex';
 			if (settingsPanel.style.display === 'flex') {
 				auditPanel.style.display = 'none';
 				browserPanel.style.display = 'none';
 				criticPanel.style.display = 'none';
+				changesPanel.style.display = 'none';
 			}
 		});
 
@@ -1827,6 +2104,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 				settingsPanel.style.display = 'none';
 				browserPanel.style.display = 'none';
 				criticPanel.style.display = 'none';
+				changesPanel.style.display = 'none';
 			}
 		});
 
@@ -1836,6 +2114,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 				settingsPanel.style.display = 'none';
 				auditPanel.style.display = 'none';
 				criticPanel.style.display = 'none';
+				changesPanel.style.display = 'none';
 				vscode.postMessage({ type: 'checkBrowser' });
 			}
 		});
@@ -2011,6 +2290,26 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			reader.readAsDataURL(file);
 		});
 
+		document.addEventListener('paste', (e) => {
+			const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+			for (let i = 0; i < items.length; i++) {
+				const item = items[i];
+				if (item.kind === 'file' && item.type.startsWith('image/')) {
+					const blob = item.getAsFile();
+					const reader = new FileReader();
+					reader.onload = (evt) => {
+						attachedImageBase64 = evt.target.result;
+						previewImg.src = attachedImageBase64;
+						previewName.textContent = 'Pasted Image';
+						previewContainer.style.display = 'flex';
+					};
+					reader.readAsDataURL(blob);
+					e.preventDefault();
+					break;
+				}
+			}
+		});
+
 		previewClear.addEventListener('click', () => {
 			attachedImageBase64 = null;
 			fileInput.value = '';
@@ -2023,6 +2322,10 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 			history.innerHTML = '';
 			statusEl = null;
 			vscode.postMessage({ type: 'resetChat' });
+		});
+
+		exportBtn.addEventListener('click', () => {
+			vscode.postMessage({ type: 'exportChat' });
 		});
 
 		sendBtn.addEventListener('click', () => {
@@ -2150,12 +2453,12 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 
 				case 'response':
 					clearStatus();
-					appendMessage('Zelos: ' + msg.value, 'msg-agent');
+					appendMessage('Zelos: ' + msg.value, 'msg-agent', null, msg.usage);
 					break;
 
 				case 'tool_action':
 					clearStatus();
-					appendMessage('Zelos: ' + msg.value, 'msg-agent');
+					appendMessage('Zelos: ' + msg.value, 'msg-agent', null, msg.usage);
 					break;
 
 				case 'status':
@@ -2165,6 +2468,11 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 				case 'error':
 					clearStatus();
 					appendMessage(msg.value, 'msg-error');
+					break;
+
+				case 'updateChanges':
+					sessionChanges = msg.changes || [];
+					renderChangesList();
 					break;
 
 				case 'lock':
@@ -2217,6 +2525,7 @@ export class ZelosWebviewProvider implements vscode.WebviewViewProvider {
 						'<div class="approval-actions">' +
 							'<button class="approve-btn approve-file-btn">Approve</button>' +
 							'<button class="reject-btn reject-file-btn">Reject</button>' +
+							'<button class="diff-btn diff-file-btn" data-path="' + escapeHtml(msg.path) + '" data-content="' + escapeHtml(msg.content) + '">View Diff</button>' +
 						'</div>';
 					history.appendChild(div);
 					history.scrollTop = history.scrollHeight;
@@ -2356,4 +2665,19 @@ function getNonce() {
 		text += possible.charAt(Math.floor(Math.random() * possible.length));
 	}
 	return text;
+}
+
+class ZelosContentProvider implements vscode.TextDocumentContentProvider {
+	private _documents = new Map<string, string>();
+	private _onDidChange = new vscode.EventEmitter<vscode.Uri>();
+	public readonly onDidChange = this._onDidChange.event;
+
+	public setContent(uri: vscode.Uri, content: string) {
+		this._documents.set(uri.toString(), content);
+		this._onDidChange.fire(uri);
+	}
+
+	public provideTextDocumentContent(uri: vscode.Uri): string {
+		return this._documents.get(uri.toString()) || '';
+	}
 }

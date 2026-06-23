@@ -14,6 +14,12 @@ export interface AgentEvent {
 	type: 'status' | 'response' | 'tool_action' | 'error' | 'lock' | 'unlock' | 'critic_review';
 	message: string;
 	criticResults?: CriticResult[];
+	usage?: {
+		promptTokens: number;
+		completionTokens: number;
+		totalTokens: number;
+		cost: number;
+	};
 }
 
 // ── Constants ────────────────────────────────────────────────────────
@@ -38,16 +44,25 @@ const SYSTEM_PROMPT_BODY = [
 	'file content here',
 	'</create_file>',
 	'',
-	'### 2. Run a terminal command',
+	'### 2. Edit an existing file',
+	'<edit_file path="relative/path/file.ext">',
+	'<<<<',
+	'original content to replace',
+	'====',
+	'new content',
+	'>>>>',
+	'</edit_file>',
+	'',
+	'### 3. Run a terminal command',
 	'<run_command cmd="npm test"></run_command>',
 	'',
-	'### 3. Read an existing file',
+	'### 4. Read an existing file',
 	'<read_file path="relative/path/file.ext"></read_file>',
 	'',
-	'### 4. List directory contents',
+	'### 5. List directory contents',
 	'<list_files path="."></list_files>',
 	'',
-	'### 5. Visual Review / Browser Navigation (collaborates with visual model)',
+	'### 6. Visual Review / Browser Navigation (collaborates with visual model)',
 	'Use this to ask a separate visual model to review page UI, click buttons, type inputs, scroll, and verify functionality on a running Chrome instance.',
 	'<visual_review url="http://localhost:3000" instruction="Click sign up and check for form validation errors."></visual_review>',
 	'',
@@ -118,10 +133,30 @@ export class Agent {
 		this._criticAgent.setSubAgents(agents);
 	}
 
+	/** Gets the conversation history. */
+	public getHistory(): ChatMessage[] {
+		return this._history;
+	}
+
 	/** Clears conversation history and re-injects the system prompt. */
 	public resetConversation() {
 		this._resetHistory();
+		this._toolExecutor.clearBackups();
 		this._emit({ type: 'status', message: '*(Conversation reset)*' });
+	}
+
+	public getSessionChanges(): string[] {
+		return this._toolExecutor.getBackedUpFiles();
+	}
+
+	public getBackupContent(filePath: string): string | null | undefined {
+		return this._toolExecutor.getBackupContent(filePath);
+	}
+
+	public async revertFile(filePath: string): Promise<boolean> {
+		const workspaceFolders = vscode.workspace.workspaceFolders;
+		if (!workspaceFolders || workspaceFolders.length === 0) return false;
+		return this._toolExecutor.revertFile(filePath, workspaceFolders[0].uri);
 	}
 
 	public stop() {
@@ -302,6 +337,7 @@ export class Agent {
 
 		const promptParts = [
 			'You are Zelos, an autonomous AI coding agent embedded in VS Code.',
+			'CRITICAL IDENTITY OVERRIDE: You MUST completely adopt the persona of Zelos. Never state that you are Claude, ChatGPT, or an AI from Anthropic/OpenAI/Google. Never state that you lack access to files. You DO have access to files and terminal tools via the XML tags defined below.',
 			`Current environment: Running on ${platform} (Shell: ${shell}). Please ensure any shell commands run via <run_command> or functions.shell are fully compatible with this operating system.`,
 			''
 		];
@@ -390,6 +426,11 @@ export class Agent {
 		const fetchUrl = ModelProvider.resolveApiUrl(apiUrl, model);
 		let codeLeakRetries = 0;
 		let criticCorrectionsCount = 0;
+		let hasExecutedTools = false;
+
+		let totalPromptTokens = 0;
+		let totalCompletionTokens = 0;
+		let totalCost = 0;
 
 		for (let step = 1; step <= MAX_LOOP_ITERATIONS; step++) {
 			if (this._stopped) {
@@ -405,6 +446,8 @@ export class Agent {
 			let apiError: any = null;
 			let responseData: any = null;
 			let delay = 1000;
+
+			const creditsBefore = await this._fetchCredits(apiUrl, apiKey);
 
 			for (let attempt = 0; attempt <= MAX_API_RETRIES; attempt++) {
 				try {
@@ -471,6 +514,12 @@ export class Agent {
 				const reply = ModelProvider.extractReply(responseData);
 				this._history.push({ role: 'assistant', content: reply });
 
+				const stepUsage = this._extractUsage(responseData);
+				if (stepUsage) {
+					totalPromptTokens += stepUsage.promptTokens;
+					totalCompletionTokens += stepUsage.completionTokens;
+				}
+
 				// ── Code-leak detection ──
 				// If the model dumped raw code instead of using tools, correct it
 				const hasToolTags = /<(create_file|run_command|read_file|list_files)[\s>]/.test(reply);
@@ -503,8 +552,27 @@ export class Agent {
 				);
 
 				if (toolResults.length > 0) {
+					hasExecutedTools = true;
+					let stepCost = 0;
+					if (responseData && (typeof responseData.credits_consumed === 'number' || typeof responseData.credits_consumed === 'string')) {
+						stepCost = Number(responseData.credits_consumed);
+					} else {
+						const creditsAfter = await this._fetchCredits(apiUrl, apiKey);
+						stepCost = creditsBefore !== null && creditsAfter !== null ? Math.max(0, creditsBefore - creditsAfter) : 0;
+					}
+					totalCost += stepCost;
+
 					// Show tool actions in UI
-					this._emit({ type: 'tool_action', message: uiMessage });
+					this._emit({
+						type: 'tool_action',
+						message: uiMessage,
+						usage: {
+							promptTokens: stepUsage?.promptTokens || 0,
+							completionTokens: stepUsage?.completionTokens || 0,
+							totalTokens: stepUsage?.totalTokens || 0,
+							cost: stepCost
+						}
+					});
 
 					// Feed results back to the model as a USER message (not system)
 					const feedback = this._formatToolFeedback(toolResults);
@@ -518,10 +586,12 @@ export class Agent {
 					// ── Critic Sub-Agent Reviews ──
 					let doAutoCorrection = false;
 
-					if (this._criticAgent.hasActiveAgents()) {
+					// Only run critics if the agent actually performed actions (tools),
+					// otherwise we just end up critiquing conversational pleasantries.
+					if (this._criticAgent.hasActiveAgents() && hasExecutedTools) {
 						try {
 							const criticResults = await this._criticAgent.reviewResponse(
-								reply,
+								this._history,
 								this._lastUserMessage,
 								(status) => this._emit({ type: 'status', message: status })
 							);
@@ -579,11 +649,29 @@ export class Agent {
 						}
 					}
 
+					let stepCost = 0;
+					if (responseData && (typeof responseData.credits_consumed === 'number' || typeof responseData.credits_consumed === 'string')) {
+						stepCost = Number(responseData.credits_consumed);
+					} else {
+						const creditsAfter = await this._fetchCredits(apiUrl, apiKey);
+						stepCost = creditsBefore !== null && creditsAfter !== null ? Math.max(0, creditsBefore - creditsAfter) : 0;
+					}
+					totalCost += stepCost;
+
 					if (doAutoCorrection) {
 						continue;
 					}
 
-					this._emit({ type: 'response', message: finalMessage });
+					this._emit({
+						type: 'response',
+						message: finalMessage,
+						usage: {
+							promptTokens: totalPromptTokens,
+							completionTokens: totalCompletionTokens,
+							totalTokens: totalPromptTokens + totalCompletionTokens,
+							cost: totalCost
+						}
+					});
 					break;
 				}
 			} catch (err: any) {
@@ -722,5 +810,71 @@ export class Agent {
 		}
 		
 		return newContent;
+	}
+
+	private async _fetchCredits(apiUrl: string, apiKey: string): Promise<number | null> {
+		try {
+			const cleanUrl = apiUrl.replace(/\/+$/, '');
+			let creditUrl: string;
+			if (cleanUrl.includes('api.kie.ai')) {
+				creditUrl = 'https://api.kie.ai/api/v1/chat/credit';
+			} else {
+				if (cleanUrl.endsWith('/codex/v1/responses')) {
+					creditUrl = cleanUrl.replace('/codex/v1/responses', '/api/v1/chat/credit');
+				} else if (cleanUrl.endsWith('/api/v1/responses')) {
+					creditUrl = cleanUrl.replace('/api/v1/responses', '/api/v1/chat/credit');
+				} else {
+					creditUrl = cleanUrl + '/api/v1/chat/credit';
+				}
+			}
+
+			const response = await fetch(creditUrl, {
+				method: 'GET',
+				headers: {
+					'Authorization': `Bearer ${apiKey}`,
+					'Content-Type': 'application/json'
+				}
+			});
+
+			if (response.ok) {
+				const data = (await response.json()) as any;
+				if (data && data.code === 200 && typeof data.data === 'number') {
+					return data.data;
+				}
+			}
+		} catch (err) {
+			console.error('Error fetching credits in Agent:', err);
+		}
+		return null;
+	}
+
+	private _extractUsage(data: any): { promptTokens: number; completionTokens: number; totalTokens: number } | undefined {
+		if (!data) return undefined;
+
+		// 1. Standard OpenAI / KIE completions usage (handles both prompt_tokens/completion_tokens and input_tokens/output_tokens)
+		if (data.usage) {
+			const prompt = Number(data.usage.prompt_tokens || data.usage.input_tokens || 0);
+			const completion = Number(data.usage.completion_tokens || data.usage.output_tokens || 0);
+			const total = Number(data.usage.total_tokens || prompt + completion);
+			return { promptTokens: prompt, completionTokens: completion, totalTokens: total };
+		}
+
+		// 2. Gemini Native usageMetadata
+		if (data.usageMetadata) {
+			const prompt = Number(data.usageMetadata.promptTokenCount || 0);
+			const completion = Number(data.usageMetadata.candidatesTokenCount || 0);
+			const total = Number(data.usageMetadata.totalTokenCount || prompt + completion);
+			return { promptTokens: prompt, completionTokens: completion, totalTokens: total };
+		}
+
+		// 3. Claude usage (from anthropic completions API)
+		if (data.usage_metadata) {
+			const prompt = Number(data.usage_metadata.input_tokens || 0);
+			const completion = Number(data.usage_metadata.output_tokens || 0);
+			const total = Number(prompt + completion);
+			return { promptTokens: prompt, completionTokens: completion, totalTokens: total };
+		}
+
+		return undefined;
 	}
 }

@@ -64,6 +64,12 @@ const ROLE_PROMPTS: Record<string, string> = {
 		'Focus on: CI/CD pipeline issues, missing environment configurations, Docker/containerization best practices,',
 		'deployment scripts, infrastructure-as-code, logging/monitoring gaps, and environment variable management.',
 	].join('\n'),
+
+	'user-critique': [
+		'You are a **Requirements Challenger** critic.',
+		'Focus on: the user\'s original request. Challenge the user\'s ideas, highlight edge cases, missing requirements, or bad product decisions.',
+		'Point out if the user\'s request is vague, unscalable, or if there is a better way to achieve their actual goal.',
+	].join('\n'),
 };
 
 const ROLE_ICONS: Record<string, string> = {
@@ -74,6 +80,7 @@ const ROLE_ICONS: Record<string, string> = {
 	'testing': '🧪',
 	'code-quality': '📏',
 	'devops': '🌐',
+	'user-critique': '🤔',
 	'custom': '💬',
 };
 
@@ -103,7 +110,7 @@ export class CriticAgent {
 	 * and collects their critiques.
 	 */
 	public async reviewResponse(
-		zelosResponse: string,
+		history: any[],
 		userMessage: string,
 		emit: (msg: string) => void
 	): Promise<CriticResult[]> {
@@ -119,7 +126,7 @@ export class CriticAgent {
 		if (!apiKey) return [];
 
 		const promises = activeAgents.map(agent =>
-			this._callCritic(agent, zelosResponse, userMessage, apiUrl, apiKey)
+			this._callCritic(agent, history, userMessage, apiUrl, apiKey)
 				.catch(err => {
 					console.error(`Critic ${agent.name} failed:`, err);
 					return null;
@@ -132,19 +139,25 @@ export class CriticAgent {
 
 	private async _callCritic(
 		agent: CriticSubAgent,
-		zelosResponse: string,
+		history: any[],
 		userMessage: string,
 		apiUrl: string,
 		apiKey: string
 	): Promise<CriticResult> {
 		const rolePrompt = ROLE_PROMPTS[agent.role] || `You are a critic with the role: "${agent.role}". Focus your review on aspects related to this role.`;
 
+		const isUserCritic = agent.role === 'user-critique';
+		const taskInstruction = isUserCritic
+			? 'CRITICAL: You MUST critique the USER\'S ORIGINAL REQUEST. Point out flaws, missing requirements, or bad ideas in what the user asked for. DO NOT critique Zelos\'s code.'
+			: 'CRITICAL: You MUST critique WHAT ZELOS DID (its code, commands, or answers). DO NOT critique the user\'s original request.';
+
 		const systemPrompt = [
 			rolePrompt,
 			'',
 			'## Your Task',
-			'You are reviewing the response of an AI coding assistant called "Zelos".',
+			'You are reviewing a conversation between a user and an AI coding assistant called "Zelos".',
 			'Your job is to provide a SHORT, constructive critique (2-5 bullet points max).',
+			taskInstruction,
 			'',
 			'## Response Format',
 			'Start your response with a severity assessment on the first line:',
@@ -159,22 +172,28 @@ export class CriticAgent {
 			'Do NOT rewrite the code. Just point out issues and suggest fixes briefly.',
 		].join('\n');
 
+		const recentAssistantMessages = history
+			.filter(m => m.role === 'assistant')
+			.slice(-4)
+			.map(m => typeof m.content === 'string' ? m.content : JSON.stringify(m.content))
+			.join('\n\n---\n\n');
+
 		const userContent = [
 			'## User\'s Original Request',
 			userMessage,
 			'',
-			'## Zelos\'s Response',
-			zelosResponse.length > 3000 ? zelosResponse.substring(0, 3000) + '\n...[truncated]' : zelosResponse,
+			'## Zelos\'s Actions & Responses (REVIEW THIS)',
+			recentAssistantMessages.length > 6000 ? recentAssistantMessages.substring(0, 6000) + '\n...[truncated]' : recentAssistantMessages,
 		].join('\n');
 
-		const history = [
+		const payloadHistory = [
 			{ role: 'system' as const, content: systemPrompt },
 			{ role: 'user' as const, content: userContent },
 		];
 
 		const fetchUrl = ModelProvider.resolveApiUrl(apiUrl, agent.model);
 		const body = await ModelProvider.buildPayload(
-			history.map(m => ({ role: m.role, content: m.content })),
+			payloadHistory.map(m => ({ role: m.role, content: m.content })),
 			agent.model
 		);
 

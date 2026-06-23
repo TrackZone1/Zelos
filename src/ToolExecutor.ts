@@ -41,6 +41,50 @@ export interface ToolResult {
 }
 
 export class ToolExecutor {
+	private _fileBackups = new Map<string, string | null>();
+
+	public clearBackups() {
+		this._fileBackups.clear();
+	}
+
+	public getBackedUpFiles(): string[] {
+		return Array.from(this._fileBackups.keys());
+	}
+
+	public getBackupContent(filePath: string): string | null | undefined {
+		return this._fileBackups.get(filePath);
+	}
+
+	public async backupFile(filePath: string, workspaceRoot: vscode.Uri) {
+		if (this._fileBackups.has(filePath)) return;
+		try {
+			const fileUri = vscode.Uri.joinPath(workspaceRoot, filePath);
+			const data = await vscode.workspace.fs.readFile(fileUri);
+			this._fileBackups.set(filePath, Buffer.from(data).toString('utf8'));
+		} catch (_) {
+			this._fileBackups.set(filePath, null);
+		}
+	}
+
+	public async revertFile(filePath: string, workspaceRoot: vscode.Uri): Promise<boolean> {
+		if (!this._fileBackups.has(filePath)) return false;
+		const originalContent = this._fileBackups.get(filePath);
+		if (originalContent === undefined) return false;
+		const fileUri = vscode.Uri.joinPath(workspaceRoot, filePath);
+		try {
+			if (originalContent === null) {
+				await vscode.workspace.fs.delete(fileUri);
+			} else {
+				await vscode.workspace.fs.writeFile(fileUri, Buffer.from(originalContent, 'utf8'));
+			}
+			this._fileBackups.delete(filePath);
+			return true;
+		} catch (err) {
+			console.error(`Failed to revert ${filePath}:`, err);
+			return false;
+		}
+	}
+
 	/**
 	 * Parses the agent's reply for tool-execution XML tags and runs them.
 	 * Returns a cleaned UI message and an array of structured results
@@ -79,6 +123,13 @@ export class ToolExecutor {
 		// ── create_file ──────────────────────────────────────────────
 		const fileResults = await this._handleCreateFile(reply, workspaceRoot, requestFileApproval);
 		for (const r of fileResults) {
+			uiMessage = uiMessage.replace(r.rawMatch, r.uiSnippet);
+			toolResults.push(r.result);
+		}
+
+		// ── edit_file ────────────────────────────────────────────────
+		const editResults = await this._handleEditFile(reply, workspaceRoot, requestFileApproval);
+		for (const r of editResults) {
 			uiMessage = uiMessage.replace(r.rawMatch, r.uiSnippet);
 			toolResults.push(r.result);
 		}
@@ -122,7 +173,7 @@ export class ToolExecutor {
 	// ─── Private helpers ──────────────────────────────────────────────
 
 	private _hasToolTags(text: string): boolean {
-		return /<(create_file|run_command|read_file|list_files|tool_call|visual_review)[\s>]/.test(text);
+		return /<(create_file|edit_file|run_command|read_file|list_files|tool_call|visual_review)[\s>]/.test(text);
 	}
 
 	private async _handleCreateFile(
@@ -169,6 +220,10 @@ export class ToolExecutor {
 
 		try {
 			const fileUri = vscode.Uri.joinPath(workspaceRoot, filePath);
+			
+			// Backup file before overwriting
+			await this.backupFile(filePath, workspaceRoot);
+
 			// Ensure parent directory exists
 			const parentUri = vscode.Uri.joinPath(fileUri, '..');
 			try { await vscode.workspace.fs.createDirectory(parentUri); } catch { /* already exists */ }
@@ -188,12 +243,108 @@ export class ToolExecutor {
 		}
 	}
 
+	private async _handleEditFile(
+		reply: string,
+		workspaceRoot: vscode.Uri,
+		requestFileApproval?: (path: string, content: string) => Promise<boolean>,
+	): Promise<{ rawMatch: string; uiSnippet: string; result: ToolResult }[]> {
+		const regex = /<edit_file\s+path="([^"]+)">([\s\S]*?)<\/edit_file>/g;
+		const results: { rawMatch: string; uiSnippet: string; result: ToolResult }[] = [];
+		let match;
+
+		while ((match = regex.exec(reply)) !== null) {
+			const filePath = decodeXmlEntities(match[1]);
+			const patchContent = match[2];
+
+			const res = await this._editSingleFile(filePath, patchContent, match[0], workspaceRoot, requestFileApproval);
+			results.push(res);
+		}
+		return results;
+	}
+
+	private async _editSingleFile(
+		filePath: string,
+		patchContent: string,
+		rawMatch: string,
+		workspaceRoot: vscode.Uri,
+		requestFileApproval?: (path: string, content: string) => Promise<boolean>,
+	): Promise<{ rawMatch: string; uiSnippet: string; result: ToolResult }> {
+		const fileUri = vscode.Uri.joinPath(workspaceRoot, filePath);
+		let originalContent = '';
+		try {
+			const data = await vscode.workspace.fs.readFile(fileUri);
+			originalContent = Buffer.from(data).toString('utf8');
+		} catch (err) {
+			return {
+				rawMatch,
+				uiSnippet: `\n> **[Error] Edit file failed:** \`${filePath}\` not found.\n`,
+				result: { action: `edit_file ${filePath}`, status: 'error', details: 'File not found.' },
+			};
+		}
+
+		let newContent = originalContent;
+		try {
+			const blockRegex = /<<<<\n([\s\S]*?)\n====\n([\s\S]*?)\n>>>>/g;
+			let match;
+			let blockFound = false;
+			while ((match = blockRegex.exec(patchContent)) !== null) {
+				blockFound = true;
+				const search = match[1];
+				const replace = match[2];
+				if (newContent.includes(search)) {
+					newContent = newContent.replace(search, replace);
+				} else {
+					throw new Error(`Could not find search block in ${filePath}`);
+				}
+			}
+			if (!blockFound) {
+				throw new Error("No valid <<<< ==== >>>> search/replace blocks found.");
+			}
+		} catch (err: any) {
+			return {
+				rawMatch,
+				uiSnippet: `\n> **[Error] Failed to edit file:** \`${filePath}\` — ${err.message}\n`,
+				result: { action: `edit_file ${filePath}`, status: 'error', details: err.message },
+			};
+		}
+
+		// ── Approval check ──
+		if (requestFileApproval) {
+			const approved = await requestFileApproval(filePath, newContent);
+			if (!approved) {
+				return {
+					rawMatch,
+					uiSnippet: `\n> **[Rejected] File edit by user:** \`${filePath}\`\n`,
+					result: { action: `edit_file ${filePath}`, status: 'error', details: 'File edit was rejected by the user.' },
+				};
+			}
+		}
+
+		try {
+			// Backup file before overwriting
+			await this.backupFile(filePath, workspaceRoot);
+
+			await vscode.workspace.fs.writeFile(fileUri, Buffer.from(newContent, 'utf8'));
+			return {
+				rawMatch,
+				uiSnippet: `\n> **[Edited] File:** \`${filePath}\`\n`,
+				result: { action: `edit_file ${filePath}`, status: 'success', details: 'File edited successfully.' },
+			};
+		} catch (err: any) {
+			return {
+				rawMatch,
+				uiSnippet: `\n> **[Error] Failed to edit file:** \`${filePath}\` — ${err.message}\n`,
+				result: { action: `edit_file ${filePath}`, status: 'error', details: err.message },
+			};
+		}
+	}
+
 	private async _handleRunCommand(
 		reply: string,
 		workspacePath: string,
 		requestApproval?: (command: string) => Promise<boolean>,
 	): Promise<{ rawMatch: string; uiSnippet: string; result: ToolResult }[]> {
-		const regex = /<run_command\s+cmd="([^"]+)">\s*<\/run_command>/g;
+		const regex = /<run_command\s+cmd="([^"]+)"\s*(?:\/>|>(?:\s*<\/run_command>)?)/g;
 		const results: { rawMatch: string; uiSnippet: string; result: ToolResult }[] = [];
 		let match;
 
@@ -266,7 +417,7 @@ export class ToolExecutor {
 		reply: string,
 		workspaceRoot: vscode.Uri,
 	): Promise<{ rawMatch: string; uiSnippet: string; result: ToolResult }[]> {
-		const regex = /<read_file\s+path="([^"]+)">\s*<\/read_file>/g;
+		const regex = /<read_file\s+path="([^"]+)"\s*(?:\/>|>(?:\s*<\/read_file>)?)/g;
 		const results: { rawMatch: string; uiSnippet: string; result: ToolResult }[] = [];
 		let match;
 
@@ -311,7 +462,7 @@ export class ToolExecutor {
 		reply: string,
 		workspaceRoot: vscode.Uri,
 	): Promise<{ rawMatch: string; uiSnippet: string; result: ToolResult }[]> {
-		const regex = /<list_files\s+path="([^"]*)">\s*<\/list_files>/g;
+		const regex = /<list_files\s+path="([^"]*)"\s*(?:\/>|>(?:\s*<\/list_files>)?)/g;
 		const results: { rawMatch: string; uiSnippet: string; result: ToolResult }[] = [];
 		let match;
 
@@ -364,7 +515,7 @@ export class ToolExecutor {
 		requestCommandApproval?: (command: string) => Promise<boolean>,
 		requestFileApproval?: (path: string, content: string) => Promise<boolean>,
 	): Promise<{ rawMatch: string; uiSnippet: string; result: ToolResult }[]> {
-		const regex = /<tool_call\s+name="([^"]+)"\s+arguments=(['"])([\s\S]*?)\2>\s*<\/tool_call>/g;
+		const regex = /<tool_call\s+name="([^"]+)"\s+arguments=(['"])([\s\S]*?)\2\s*(?:\/>|>(?:\s*<\/tool_call>)?)/g;
 		const results: { rawMatch: string; uiSnippet: string; result: ToolResult }[] = [];
 		let match;
 
@@ -392,30 +543,73 @@ export class ToolExecutor {
 				}
 			}
 
+			const getStringArg = (keys: string[]): string => {
+				if (typeof args === 'object' && args !== null) {
+					for (const k of keys) {
+						if (typeof args[k] === 'string') return args[k];
+						if (typeof args[k] === 'number' || typeof args[k] === 'boolean') return String(args[k]);
+					}
+					if (Object.keys(args).length === 0) {
+						return argStr.trim();
+					}
+				}
+				if (typeof args === 'string') {
+					return args;
+				}
+				return '';
+			};
+
+			const lowerName = name.toLowerCase().replace(/^functions\./, '');
+
 			// Map and execute based on tool name
-			if (name === 'functions.shell' || name === 'functions.run_command' || name === 'run_command') {
-				const command = args.cmd || args.command || '';
+			if (lowerName === 'shell' || lowerName === 'run_command' || lowerName === 'bash' || lowerName === 'sh' || lowerName === 'terminal' || lowerName === 'execute_bash' || lowerName === 'run_bash') {
+				const command = getStringArg(['cmd', 'command', 'code']);
 				if (command) {
 					const res = await this._runSingleCommand(command, rawMatch, workspacePath, requestCommandApproval);
 					results.push(res);
 				}
-			} else if (name === 'functions.read_file' || name === 'read_file') {
-				const filePath = args.path || args.filePath || '';
+			} else if (lowerName === 'read_file' || lowerName === 'view_file' || lowerName === 'read' || lowerName === 'fetch_file') {
+				const filePath = getStringArg(['path', 'filePath', 'file']);
 				if (filePath) {
 					const res = await this._readSingleFile(filePath, rawMatch, workspaceRoot);
 					results.push(res);
 				}
-			} else if (name === 'functions.create_file' || name === 'functions.write_file' || name === 'create_file') {
-				const filePath = args.path || args.filePath || '';
-				const content = args.content || args.fileContent || '';
+			} else if (lowerName === 'create_file' || lowerName === 'write_file' || lowerName === 'write' || lowerName === 'save_file') {
+				const filePath = getStringArg(['path', 'filePath', 'file']);
+				const content = getStringArg(['content', 'fileContent', 'body']);
 				if (filePath) {
-					const res = await this._createSingleFile(filePath, content, rawMatch, workspaceRoot, requestFileApproval);
+					const res = await this._createSingleFile(filePath, content || '', rawMatch, workspaceRoot, requestFileApproval);
 					results.push(res);
 				}
-			} else if (name === 'functions.list_files' || name === 'functions.list_dir' || name === 'list_files') {
-				const dirPath = args.path || args.dirPath || '.';
+			} else if (lowerName === 'edit_file' || lowerName === 'edit') {
+				const filePath = getStringArg(['path', 'filePath', 'file']);
+				const content = getStringArg(['content', 'patch', 'body']);
+				if (filePath) {
+					const res = await this._editSingleFile(filePath, content || '', rawMatch, workspaceRoot, requestFileApproval);
+					results.push(res);
+				}
+			} else if (lowerName === 'list_files' || lowerName === 'list_directory' || lowerName === 'ls' || lowerName === 'dir') {
+				const dirPath = getStringArg(['path', 'dirPath', 'dir']) || '.';
 				const res = await this._listSingleDir(dirPath, rawMatch, workspaceRoot);
 				results.push(res);
+			} else if (lowerName === 'view') {
+				const pathArg = getStringArg(['path', 'filePath', 'dirPath', 'file', 'dir']) || '.';
+				const fileUri = vscode.Uri.joinPath(workspaceRoot, pathArg);
+				let isDir = false;
+				try {
+					const stat = await vscode.workspace.fs.stat(fileUri);
+					isDir = (stat.type === vscode.FileType.Directory);
+				} catch (_) {
+					isDir = !pathArg.includes('.') || pathArg.endsWith('/') || pathArg === '/home/claude';
+				}
+
+				if (isDir) {
+					const res = await this._listSingleDir(pathArg, rawMatch, workspaceRoot);
+					results.push(res);
+				} else {
+					const res = await this._readSingleFile(pathArg, rawMatch, workspaceRoot);
+					results.push(res);
+				}
 			}
 		}
 		return results;
@@ -425,7 +619,7 @@ export class ToolExecutor {
 		reply: string,
 		emitStatus?: (status: string) => void
 	): Promise<{ rawMatch: string; uiSnippet: string; result: ToolResult }[]> {
-		const regex = /<visual_review\s+url="([^"]+)"\s+instruction="([^"]+)">\s*<\/visual_review>/g;
+		const regex = /<visual_review\s+url="([^"]+)"\s+instruction="([^"]+)"\s*(?:\/>|>(?:\s*<\/visual_review>)?)/g;
 		const results: { rawMatch: string; uiSnippet: string; result: ToolResult }[] = [];
 		let match;
 
